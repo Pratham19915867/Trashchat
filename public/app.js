@@ -1,35 +1,54 @@
-
 (() => {
   const socket = io();
   const $ = id => document.getElementById(id);
 
   const ui = {
-    lobby: $("lobby"), chat: $("chat"),
-    createName: $("createName"), joinName: $("joinName"),
-    roomCode: $("roomCode"), createBtn: $("createBtn"), joinBtn: $("joinBtn"),
-    lobbyError: $("lobbyError"), connectionLabel: $("connectionLabel"),
-    activeRoomCode: $("activeRoomCode"), copyCodeBtn: $("copyCodeBtn"),
-    copyInviteBtn: $("copyInviteBtn"), backBtn: $("backBtn"),
-    memberCount: $("memberCount"), membersList: $("membersList"),
-    headerMembers: $("headerMembers"), ttlLabel: $("ttlLabel"),
-    messages: $("messages"), messageForm: $("messageForm"),
-    messageInput: $("messageInput"), fileInput: $("fileInput"),
-    attachBtn: $("attachBtn"), uploadPreview: $("uploadPreview"),
-    chatError: $("chatError"), resetBtn: $("resetBtn"),
-    mobileMembersBtn: $("mobileMembersBtn"), toast: $("toast")
+    lobby: $("lobby"),
+    chat: $("chat"),
+    createName: $("createName"),
+    joinName: $("joinName"),
+    roomCode: $("roomCode"),
+    createBtn: $("createBtn"),
+    joinBtn: $("joinBtn"),
+    lobbyError: $("lobbyError"),
+    connectionLabel: $("connectionLabel"),
+    activeRoomCode: $("activeRoomCode"),
+    copyCodeBtn: $("copyCodeBtn"),
+    copyInviteBtn: $("copyInviteBtn"),
+    backBtn: $("backBtn"),
+    memberCount: $("memberCount"),
+    membersList: $("membersList"),
+    headerMembers: $("headerMembers"),
+    ttlLabel: $("ttlLabel"),
+    messages: $("messages"),
+    messageForm: $("messageForm"),
+    messageInput: $("messageInput"),
+    fileInput: $("fileInput"),
+    attachBtn: $("attachBtn"),
+    uploadPreview: $("uploadPreview"),
+    chatError: $("chatError"),
+    resetBtn: $("resetBtn"),
+    mobileMembersBtn: $("mobileMembersBtn"),
+    toast: $("toast")
   };
 
   const reactions = ["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀"];
+  const themes = [
+    "midnight", "aurora", "ocean", "sakura", "desert",
+    "dark", "mono", "graphite", "ice", "ember"
+  ];
+
   let currentCode = null;
-  let currentName = "Guest";
   let toastTimer = null;
 
   socket.on("connect", () => {
     ui.connectionLabel.textContent = "Connected";
   });
+
   socket.on("disconnect", () => {
     ui.connectionLabel.textContent = "Reconnecting…";
   });
+
   socket.on("connect_error", () => {
     ui.connectionLabel.textContent = "Connection issue";
   });
@@ -60,8 +79,6 @@
     ui.activeRoomCode.textContent = code;
     ui.lobby.classList.add("hidden");
     ui.chat.classList.remove("hidden");
-    ui.chat.classList.add("chat-layout");
-    ui.lobbyError.textContent = "";
     ui.chatError.textContent = "";
     ui.messages.innerHTML = "";
 
@@ -86,17 +103,16 @@
         showError(result?.error || "Something went wrong.", target);
         return;
       }
+
       setRoom(result.code, result.snapshot);
     });
   }
 
   ui.createBtn.addEventListener("click", () => {
-    currentName = nameValue("createName");
-    enterRoom("room:create", { name: currentName });
+    enterRoom("room:create", { name: nameValue("createName") });
   });
 
   ui.joinBtn.addEventListener("click", () => {
-    currentName = nameValue("joinName");
     const code = ui.roomCode.value.trim().toUpperCase();
 
     if (!/^[A-Z0-9]{6}$/.test(code)) {
@@ -104,7 +120,10 @@
       return;
     }
 
-    enterRoom("room:join", { name: currentName, code });
+    enterRoom("room:join", {
+      name: nameValue("joinName"),
+      code
+    });
   });
 
   ui.roomCode.addEventListener("input", () => {
@@ -121,7 +140,6 @@
     ui.uploadPreview.classList.add("hidden");
     ui.uploadPreview.innerHTML = "";
     ui.chat.classList.add("hidden");
-    ui.chat.classList.remove("chat-layout");
     ui.lobby.classList.remove("hidden");
     document.querySelector(".room-sidebar")?.classList.remove("show-mobile");
     history.replaceState({}, "", "/");
@@ -183,6 +201,7 @@
         showError(result?.error || "Could not clear messages.", "chatError");
         return;
       }
+
       showToast("Room messages cleared");
     });
   });
@@ -238,6 +257,7 @@
 
   async function uploadAndSend(file) {
     const button = ui.uploadPreview.querySelector("button");
+
     if (button) {
       button.disabled = true;
       button.textContent = "Uploading…";
@@ -260,10 +280,12 @@
       socket.emit("file:share", { file: result.file }, answer => {
         if (!answer?.ok) {
           showError(answer?.error || "Could not share file.", "chatError");
+
           if (button) {
             button.disabled = false;
             button.textContent = "Try again";
           }
+
           return;
         }
 
@@ -271,6 +293,7 @@
       });
     } catch (error) {
       showError(error.message || "Upload failed.", "chatError");
+
       if (button) {
         button.disabled = false;
         button.textContent = "Try again";
@@ -291,7 +314,6 @@
   socket.on("message:deleted", ({ id }) => {
     const node = document.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
     if (node) node.remove();
-
     if (!ui.messages.querySelector(".message-row")) showEmptyState();
   });
 
@@ -379,7 +401,6 @@
     const node = document.createElement("div");
     node.className = "system-message";
     node.textContent = text;
-
     ui.messages.append(node);
     scrollToBottom();
   }
@@ -516,47 +537,89 @@
     ui.messages.scrollTop = ui.messages.scrollHeight;
   }
 
-  // Theme selector: each visitor's choice is saved in their browser.
-  const themeSelect = $("themeSelect");
-  const allowedThemes = new Set([
-    "midnight", "ocean", "emerald", "sunset", "light"
-  ]);
+  // Theme popup and selection.
+  const themeModal = $("themeModal");
+  const openThemes = $("openThemes");
+  const closeThemes = $("closeThemes");
+  const themeOptions = [...document.querySelectorAll("[data-theme-choice]")];
 
   function applyTheme(theme) {
-    const safeTheme = allowedThemes.has(theme) ? theme : "midnight";
+    const safeTheme = themes.includes(theme) ? theme : "midnight";
     document.body.dataset.theme = safeTheme;
 
-    if (themeSelect) themeSelect.value = safeTheme;
+    themeOptions.forEach(option => {
+      const selected = option.dataset.themeChoice === safeTheme;
+      option.classList.toggle("selected", selected);
+      option.setAttribute("aria-pressed", String(selected));
+    });
 
-    const colors = {
-      midnight: "#0b0b18",
-      ocean: "#071522",
-      emerald: "#07150f",
-      sunset: "#1b0d12",
-      light: "#f4f6fb"
+    const themeColors = {
+      midnight: "#071522",
+      aurora: "#092a2b",
+      ocean: "#071b32",
+      sakura: "#281222",
+      desert: "#29170b",
+      dark: "#050505",
+      mono: "#111111",
+      graphite: "#141821",
+      ice: "#08252e",
+      ember: "#270f0b"
     };
 
     document.querySelector('meta[name="theme-color"]')
-      ?.setAttribute("content", colors[safeTheme]);
+      ?.setAttribute("content", themeColors[safeTheme]);
   }
 
+  function openThemeModal() {
+    themeModal.classList.add("open");
+    themeModal.setAttribute("aria-hidden", "false");
+    document.body.classList.add("theme-modal-open");
+    closeThemes.focus();
+  }
+
+  function closeThemeModal() {
+    themeModal.classList.remove("open");
+    themeModal.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("theme-modal-open");
+    openThemes.focus();
+  }
+
+  openThemes.addEventListener("click", openThemeModal);
+  closeThemes.addEventListener("click", closeThemeModal);
+
+  themeModal.querySelectorAll("[data-close-themes]").forEach(element => {
+    element.addEventListener("click", closeThemeModal);
+  });
+
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && themeModal.classList.contains("open")) {
+      closeThemeModal();
+    }
+  });
+
+  themeOptions.forEach(option => {
+    option.addEventListener("click", () => {
+      const theme = option.dataset.themeChoice;
+      applyTheme(theme);
+
+      try {
+        localStorage.setItem("tempchat-theme", theme);
+      } catch (_) {}
+
+      showToast(`${option.querySelector("strong").textContent} theme applied`);
+      closeThemeModal();
+    });
+  });
+
   let savedTheme = "midnight";
+
   try {
     savedTheme = localStorage.getItem("tempchat-theme") || "midnight";
   } catch (_) {}
 
   applyTheme(savedTheme);
 
-  if (themeSelect) {
-    themeSelect.addEventListener("change", () => {
-      applyTheme(themeSelect.value);
-      try {
-        localStorage.setItem("tempchat-theme", themeSelect.value);
-      } catch (_) {}
-    });
-  }
-
-  // Allow invite links to prefill the room code.
+  // Pre-fill room code from an invite link.
   const params = new URLSearchParams(location.search);
   const inviteCode = (params.get("room") || "").toUpperCase();
 
