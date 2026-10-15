@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b0b18">
+  <meta name="description" content="Temporary real-time chat rooms. Create a room, share the code, and chat.">
+  <title>TempChat 2.0 — Talk, then vanish</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div><div class="ambient ambient-three"></div>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="TempChat home"><span class="brand-mark">t<span>c</span></span><span>tempchat<span class="brand-version">2.0</span></span></a>
+      <div class="topbar-right"><span class="live-dot"></span><span id="connectionLabel">Connecting…</span></div>
+    </header>
+
+    <section id="lobby" class="lobby">
+      <div class="hero">
+        <div class="eyebrow"><span class="sparkle">✦</span> YOUR SPACE. YOUR PEOPLE.</div>
+        <h1>Talk freely.<br><span>Leave no trace.</span></h1>
+        <p class="hero-copy">A little room for your conversations. No account, no history that sticks around. Just you and your people.</p>
+      </div>
+      <div class="entry-grid">
+        <section class="glass-card create-card">
+          <div class="card-icon">✧</div>
+          <h2>Create a room</h2>
+          <p>Start a fresh conversation and invite your people.</p>
+          <label for="createName">Your display name</label>
+          <input id="createName" maxlength="24" placeholder="e.g. Alex" autocomplete="nickname">
+          <button id="createBtn" class="primary-btn"><span>Create a room</span><span>↗</span></button>
+        </section>
+        <section class="glass-card join-card">
+          <div class="card-icon join-icon">⌁</div>
+          <h2>Join a room</h2>
+          <p>Already have a code? You're one step away.</p>
+          <label for="joinName">Your display name</label>
+          <input id="joinName" maxlength="24" placeholder="e.g. Alex" autocomplete="nickname">
+          <label for="roomCode">Room code</label>
+          <input id="roomCode" class="code-input" maxlength="6" placeholder="ABC123" autocomplete="off" spellcheck="false">
+          <button id="joinBtn" class="secondary-btn"><span>Join conversation</span><span>→</span></button>
+        </section>
+      </div>
+      <div class="trust-row"><span>✦ No sign-up</span><span>⌁ Temporary rooms</span><span>◈ Files & reactions</span></div>
+      <p id="lobbyError" class="error-text" role="alert"></p>
+    </section>
+
+    <section id="chat" class="chat-layout hidden">
+      <aside class="room-sidebar glass-panel">
+        <button id="backBtn" class="back-link">← <span>Leave room</span></button>
+        <div class="room-details">
+          <div class="room-symbol">✧</div>
+          <div class="muted-label">YOU'RE IN ROOM</div>
+          <div class="room-code-line"><strong id="activeRoomCode">------</strong><button id="copyCodeBtn" class="icon-btn" title="Copy room code" aria-label="Copy room code">▢</button></div>
+          <button id="copyInviteBtn" class="invite-btn">↗ Copy invite link</button>
+        </div>
+        <div class="sidebar-divider"></div>
+        <div class="members-heading"><span>IN THIS ROOM</span><span id="memberCount" class="count-pill">1</span></div>
+        <div id="membersList" class="members-list"></div>
+        <div class="sidebar-bottom">
+          <div class="privacy-note"><span>◉</span><div><strong>Temporary by design</strong><small>Messages auto-delete after <span id="ttlLabel">10 min</span>.</small></div></div>
+          <button id="resetBtn" class="reset-btn">⌫ Clear room messages</button>
+        </div>
+      </aside>
+
+      <section class="conversation glass-panel">
+        <header class="conversation-header">
+          <div class="conversation-title"><div class="mini-room-icon">✧</div><div><h2>Private room</h2><p><span class="live-dot"></span> <span id="headerMembers">1 person here</span></p></div></div>
+          <div class="header-actions"><span class="temporary-badge">◷ TEMPORARY</span><button id="mobileMembersBtn" class="icon-btn mobile-only" title="Show members">☷</button></div>
+        </header>
+        <div id="messages" class="messages" aria-live="polite">
+          <div id="emptyState" class="empty-state"><div class="empty-orbit"><span>✧</span></div><h3>Your conversation starts here</h3><p>Say hello. Share a thought. This space is yours.</p></div>
+        </div>
+        <div id="uploadPreview" class="upload-preview hidden"></div>
+        <div id="chatError" class="chat-error" role="alert"></div>
+        <form id="messageForm" class="composer">
+          <input id="fileInput" type="file" hidden accept="image/*,.pdf,.txt,.zip,.docx,.xlsx">
+          <button type="button" id="attachBtn" class="composer-icon" title="Attach image or file" aria-label="Attach file">＋</button>
+          <input id="messageInput" maxlength="2000" placeholder="Type a message…" autocomplete="off" aria-label="Message">
+          <span id="typingHint" class="composer-hint">Enter ↵</span>
+          <button type="submit" class="send-btn" aria-label="Send message">↑</button>
+        </form>
+        <div class="composer-footer"><span>Keep it kind. Keep it temporary.</span><span>Messages vanish automatically</span></div>
+      </section>
+    </section>
+
+    <footer class="page-footer"><span>© 2026 TempChat</span><span>Made for conversations that don't need to stay.</span></footer>
+  </main>
+  <div id="toast" class="toast" role="status"></div>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
