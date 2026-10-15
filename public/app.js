@@ -40,6 +40,191 @@
 
   let currentCode = null;
   let toastTimer = null;
+  let typingTimer = null;
+  let isTyping = false;
+  let audioContext = null;
+
+  const typingUsers = new Map();
+
+  // Animation styles and typing indicator are created automatically.
+  const enhancementStyles = document.createElement("style");
+  enhancementStyles.textContent = `
+    #tempchatTyping {
+      min-height: 18px;
+      padding: 2px 14px 6px;
+      color: var(--muted, #9ca3af);
+      font-size: 12px;
+    }
+
+    #tempchatTyping[hidden] {
+      display: none !important;
+    }
+
+    #tempchatTyping .typing-dots {
+      display: inline-flex;
+      gap: 3px;
+      margin-left: 5px;
+      vertical-align: middle;
+    }
+
+    #tempchatTyping .typing-dots i {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: tcTypingDot 1s infinite ease-in-out;
+    }
+
+    #tempchatTyping .typing-dots i:nth-child(2) {
+      animation-delay: .15s;
+    }
+
+    #tempchatTyping .typing-dots i:nth-child(3) {
+      animation-delay: .3s;
+    }
+
+    .message-row,
+    .system-message {
+      animation: tcMessageIn .22s ease-out both;
+    }
+
+    .message-row.tc-new-message {
+      animation: tcMessageIn .26s cubic-bezier(.2,.8,.2,1) both;
+    }
+
+    @keyframes tcTypingDot {
+      0%, 60%, 100% {
+        transform: translateY(0);
+        opacity: .45;
+      }
+      30% {
+        transform: translateY(-3px);
+        opacity: 1;
+      }
+    }
+
+    @keyframes tcMessageIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px) scale(.99);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .message-row,
+      .system-message,
+      #tempchatTyping .typing-dots i {
+        animation: none !important;
+      }
+    }
+  `;
+  document.head.appendChild(enhancementStyles);
+
+  const typingIndicator = document.createElement("div");
+  typingIndicator.id = "tempchatTyping";
+  typingIndicator.setAttribute("aria-live", "polite");
+  typingIndicator.hidden = true;
+
+  if (ui.messageForm?.parentNode) {
+    ui.messageForm.parentNode.insertBefore(
+      typingIndicator,
+      ui.messageForm
+    );
+  }
+
+  // Small notification sounds using the browser's Web Audio API.
+  function playSound(kind = "message") {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+
+      audioContext ||= new AudioCtx();
+
+      if (audioContext.state === "suspended") {
+        audioContext.resume().catch(() => {});
+      }
+
+      const presets = {
+        room: [[660, 0], [880, 0.09]],
+        sent: [[620, 0]],
+        received: [[740, 0]],
+        system: [[520, 0], [660, 0.08]]
+      };
+
+      (presets[kind] || presets.received).forEach(([frequency, delay]) => {
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+        const startAt = audioContext.currentTime + delay;
+
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+
+        gain.gain.setValueAtTime(0.0001, startAt);
+        gain.gain.exponentialRampToValueAtTime(0.07, startAt + 0.015);
+        gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.12);
+
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+
+        oscillator.start(startAt);
+        oscillator.stop(startAt + 0.13);
+      });
+    } catch (_) {
+      // Audio is optional; chat keeps working if sound is unavailable.
+    }
+  }
+
+  function sendTypingState(typing) {
+    if (!currentCode || isTyping === typing) return;
+
+    isTyping = typing;
+    socket.emit("typing:update", { typing });
+  }
+
+  function renderTypingUsers() {
+    const names = [...typingUsers.values()];
+
+    if (!names.length) {
+      typingIndicator.hidden = true;
+      typingIndicator.textContent = "";
+      return;
+    }
+
+    typingIndicator.hidden = false;
+
+    const label = names.length === 1
+      ? `${names[0]} is typing`
+      : names.length === 2
+        ? `${names[0]} and ${names[1]} are typing`
+        : `${names.length} people are typing`;
+
+    typingIndicator.replaceChildren(document.createTextNode(label));
+
+    const dots = document.createElement("span");
+    dots.className = "typing-dots";
+    dots.setAttribute("aria-hidden", "true");
+
+    for (let i = 0; i < 3; i++) {
+      dots.appendChild(document.createElement("i"));
+    }
+
+    typingIndicator.appendChild(dots);
+  }
+
+  // Keep messages visible when the message area changes size.
+  const messageResizeObserver = typeof ResizeObserver !== "undefined"
+    ? new ResizeObserver(() => {
+        if (!ui.chat.classList.contains("hidden")) {
+          scrollToBottom();
+        }
+      })
+    : null;
+
+  messageResizeObserver?.observe(ui.messages);
 
   socket.on("connect", () => {
     ui.connectionLabel.textContent = "Connected";
@@ -47,6 +232,8 @@
 
   socket.on("disconnect", () => {
     ui.connectionLabel.textContent = "Reconnecting…";
+    typingUsers.clear();
+    renderTypingUsers();
   });
 
   socket.on("connect_error", () => {
@@ -56,8 +243,12 @@
   function showToast(message) {
     ui.toast.textContent = message;
     ui.toast.classList.add("show");
+
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => ui.toast.classList.remove("show"), 2400);
+
+    toastTimer = setTimeout(() => {
+      ui.toast.classList.remove("show");
+    }, 2400);
   }
 
   function showError(message, target = "lobbyError") {
@@ -76,6 +267,12 @@
 
   function setRoom(code, snapshot) {
     currentCode = code;
+    isTyping = false;
+    typingUsers.clear();
+    renderTypingUsers();
+
+    playSound("room");
+
     ui.activeRoomCode.textContent = code;
     ui.lobby.classList.add("hidden");
     ui.chat.classList.remove("hidden");
@@ -89,10 +286,13 @@
     (snapshot.messages || []).forEach(addMessage);
     renderMembers(snapshot.members || []);
 
-    if (!(snapshot.messages || []).length) showEmptyState();
+    if (!(snapshot.messages || []).length) {
+      showEmptyState();
+    }
 
     history.replaceState({}, "", `/?room=${encodeURIComponent(code)}`);
     ui.messageInput.focus();
+    scrollToBottom();
   }
 
   function enterRoom(eventName, data, target = "lobbyError") {
@@ -109,7 +309,9 @@
   }
 
   ui.createBtn.addEventListener("click", () => {
-    enterRoom("room:create", { name: nameValue("createName") });
+    enterRoom("room:create", {
+      name: nameValue("createName")
+    });
   });
 
   ui.joinBtn.addEventListener("click", () => {
@@ -128,20 +330,33 @@
 
   ui.roomCode.addEventListener("input", () => {
     ui.roomCode.value = ui.roomCode.value
-      .toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, "")
+      .slice(0, 6);
   });
 
   ui.roomCode.addEventListener("keydown", event => {
-    if (event.key === "Enter") ui.joinBtn.click();
+    if (event.key === "Enter") {
+      ui.joinBtn.click();
+    }
   });
 
   function leaveRoom() {
+    sendTypingState(false);
+
     currentCode = null;
+    typingUsers.clear();
+    renderTypingUsers();
+
+    clearTimeout(typingTimer);
+
     ui.uploadPreview.classList.add("hidden");
     ui.uploadPreview.innerHTML = "";
     ui.chat.classList.add("hidden");
     ui.lobby.classList.remove("hidden");
+
     document.querySelector(".room-sidebar")?.classList.remove("show-mobile");
+
     history.replaceState({}, "", "/");
   }
 
@@ -153,6 +368,7 @@
       showToast("Copied to clipboard");
     } catch {
       const input = document.createElement("textarea");
+
       input.value = text;
       document.body.appendChild(input);
       input.select();
@@ -173,19 +389,21 @@
   });
 
   ui.copyInviteBtn.addEventListener("click", () => {
-    if (currentCode) copyText(`${location.origin}/?room=${currentCode}`);
+    if (currentCode) {
+      copyText(`${location.origin}/?room=${currentCode}`);
+    }
   });
 
   const sidebar = document.querySelector(".room-sidebar");
 
   ui.mobileMembersBtn.addEventListener("click", () => {
-    sidebar.classList.toggle("show-mobile");
+    sidebar?.classList.toggle("show-mobile");
   });
 
   document.addEventListener("click", event => {
     if (
       innerWidth <= 620 &&
-      sidebar.classList.contains("show-mobile") &&
+      sidebar?.classList.contains("show-mobile") &&
       !sidebar.contains(event.target) &&
       event.target !== ui.mobileMembersBtn
     ) {
@@ -194,7 +412,9 @@
   });
 
   ui.resetBtn.addEventListener("click", () => {
-    if (!confirm("Clear every message and attachment in this room for everyone?")) return;
+    if (!confirm("Clear every message and attachment in this room for everyone?")) {
+      return;
+    }
 
     socket.emit("room:reset", result => {
       if (!result?.ok) {
@@ -206,10 +426,33 @@
     });
   });
 
+  // Typing indicator: send updates while the user types.
+  ui.messageInput.addEventListener("input", () => {
+    if (!currentCode) return;
+
+    const hasText = ui.messageInput.value.trim().length > 0;
+    sendTypingState(hasText);
+
+    clearTimeout(typingTimer);
+
+    if (hasText) {
+      typingTimer = setTimeout(() => {
+        sendTypingState(false);
+      }, 1800);
+    }
+  });
+
+  ui.messageInput.addEventListener("blur", () => {
+    clearTimeout(typingTimer);
+    sendTypingState(false);
+  });
+
+  // Submit a text message.
   ui.messageForm.addEventListener("submit", event => {
     event.preventDefault();
 
     const text = ui.messageInput.value.trim();
+
     if (!text || !currentCode) return;
 
     socket.emit("message:send", { text }, result => {
@@ -220,10 +463,16 @@
 
       ui.messageInput.value = "";
       showError("", "chatError");
+
+      clearTimeout(typingTimer);
+      sendTypingState(false);
+      playSound("sent");
     });
   });
 
-  ui.attachBtn.addEventListener("click", () => ui.fileInput.click());
+  ui.attachBtn.addEventListener("click", () => {
+    ui.fileInput.click();
+  });
 
   ui.fileInput.addEventListener("change", () => {
     const file = ui.fileInput.files?.[0];
@@ -275,7 +524,10 @@
       });
 
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Upload failed.");
+
+      if (!response.ok) {
+        throw new Error(result.error || "Upload failed.");
+      }
 
       socket.emit("file:share", { file: result.file }, answer => {
         if (!answer?.ok) {
@@ -290,6 +542,7 @@
         }
 
         clearSelectedFile();
+        playSound("sent");
       });
     } catch (error) {
       showError(error.message || "Upload failed.", "chatError");
@@ -308,26 +561,59 @@
   }
 
   socket.on("members:update", renderMembers);
-  socket.on("message:new", addMessage);
-  socket.on("system:message", data => addSystemMessage(data.text));
+
+  socket.on("message:new", message => {
+    addMessage(message);
+  });
+
+  socket.on("system:message", data => {
+    addSystemMessage(data.text);
+    playSound("system");
+  });
+
+  // The server must emit this event to other users in the same room.
+  socket.on("typing:update", data => {
+    if (!data || data.id === socket.id) return;
+
+    if (data.typing) {
+      typingUsers.set(data.id, data.name || "Someone");
+    } else {
+      typingUsers.delete(data.id);
+    }
+
+    renderTypingUsers();
+  });
 
   socket.on("message:deleted", ({ id }) => {
-    const node = document.querySelector(`[data-message-id="${CSS.escape(id)}"]`);
+    const node = document.querySelector(
+      `[data-message-id="${CSS.escape(id)}"]`
+    );
+
     if (node) node.remove();
-    if (!ui.messages.querySelector(".message-row")) showEmptyState();
+
+    if (!ui.messages.querySelector(".message-row")) {
+      showEmptyState();
+    }
   });
 
   socket.on("reaction:update", ({ messageId, reactions: data }) => {
-    const node = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+    const node = document.querySelector(
+      `[data-message-id="${CSS.escape(messageId)}"]`
+    );
+
     if (!node) return;
 
     const bar = node.querySelector(".reaction-bar");
-    if (bar) renderReactionCounts(bar, messageId, data);
+
+    if (bar) {
+      renderReactionCounts(bar, messageId, data);
+    }
   });
 
   socket.on("room:cleared", () => {
     ui.messages.innerHTML = "";
     showEmptyState();
+    showToast("Room messages cleared");
   });
 
   socket.on("room:expired", () => {
@@ -336,12 +622,18 @@
   });
 
   function initials(name) {
-    return (name || "G").trim().split(/\s+/).slice(0, 2)
-      .map(part => part[0] || "").join("").toUpperCase();
+    return (name || "G")
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map(part => part[0] || "")
+      .join("")
+      .toUpperCase();
   }
 
   function renderMembers(members) {
     ui.memberCount.textContent = members.length;
+
     ui.headerMembers.textContent =
       `${members.length} ${members.length === 1 ? "person" : "people"} here`;
 
@@ -387,6 +679,7 @@
 
     const empty = document.createElement("div");
     empty.className = "empty-state";
+
     empty.innerHTML =
       '<div class="empty-orbit"><span>✧</span></div>' +
       '<h3>Your conversation starts here</h3>' +
@@ -396,24 +689,41 @@
   }
 
   function addSystemMessage(text) {
-    if (ui.messages.querySelector(".empty-state")) ui.messages.innerHTML = "";
+    if (ui.messages.querySelector(".empty-state")) {
+      ui.messages.innerHTML = "";
+    }
 
     const node = document.createElement("div");
     node.className = "system-message";
     node.textContent = text;
+
     ui.messages.append(node);
     scrollToBottom();
   }
 
   function addMessage(message) {
-    if (document.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`)) return;
+    if (
+      document.querySelector(
+        `[data-message-id="${CSS.escape(message.id)}"]`
+      )
+    ) {
+      return;
+    }
 
-    if (ui.messages.querySelector(".empty-state")) ui.messages.innerHTML = "";
+    if (ui.messages.querySelector(".empty-state")) {
+      ui.messages.innerHTML = "";
+    }
 
     const mine = message.senderId === socket.id;
+
     const row = document.createElement("article");
     row.className = `message-row${mine ? " mine" : ""}`;
     row.dataset.messageId = message.id;
+    row.classList.add("tc-new-message");
+
+    if (!mine) {
+      playSound("received");
+    }
 
     const avatar = document.createElement("div");
     avatar.className = "message-avatar";
@@ -432,7 +742,8 @@
 
     const time = document.createElement("time");
     time.textContent = new Date(message.createdAt).toLocaleTimeString([], {
-      hour: "2-digit", minute: "2-digit"
+      hour: "2-digit",
+      minute: "2-digit"
     });
 
     meta.append(name, time);
@@ -445,11 +756,19 @@
       content.append(bubble);
     }
 
-    if (message.file) content.append(renderFile(message.file));
+    if (message.file) {
+      content.append(renderFile(message.file));
+    }
 
     const reactionBar = document.createElement("div");
     reactionBar.className = "reaction-bar";
-    renderReactionCounts(reactionBar, message.id, message.reactions || {});
+
+    renderReactionCounts(
+      reactionBar,
+      message.id,
+      message.reactions || {}
+    );
+
     content.append(reactionBar);
 
     const picker = document.createElement("div");
@@ -461,15 +780,21 @@
       btn.textContent = emoji;
       btn.title = `React ${emoji}`;
       btn.setAttribute("aria-label", `React ${emoji}`);
+
       btn.addEventListener("click", () => {
-        socket.emit("reaction:toggle", { messageId: message.id, emoji });
+        socket.emit("reaction:toggle", {
+          messageId: message.id,
+          emoji
+        });
       });
+
       picker.append(btn);
     });
 
     content.append(picker);
     row.append(avatar, content);
     ui.messages.append(row);
+
     scrollToBottom();
   }
 
@@ -478,19 +803,31 @@
 
     if ((file.mime || "").startsWith("image/")) {
       const img = document.createElement("img");
+
       img.className = "attachment";
       img.src = file.url;
       img.alt = file.name;
       img.loading = "lazy";
-      img.addEventListener("error", () => img.replaceWith(fileLink(file)));
+
+      img.addEventListener("load", scrollToBottom);
+
+      img.addEventListener("error", () => {
+        img.replaceWith(fileLink(file));
+        scrollToBottom();
+      });
+
       wrap.append(img);
     } else {
       wrap.append(fileLink(file));
     }
 
     const caption = document.createElement("div");
-    caption.style.cssText = "font-size:9px;color:var(--muted);margin-top:5px";
-    caption.textContent = `${file.name} · ${formatBytes(file.size || 0)}`;
+    caption.style.cssText =
+      "font-size:9px;color:var(--muted);margin-top:5px";
+
+    caption.textContent =
+      `${file.name} · ${formatBytes(file.size || 0)}`;
+
     wrap.append(caption);
 
     return wrap;
@@ -498,6 +835,7 @@
 
   function fileLink(file) {
     const link = document.createElement("a");
+
     link.className = "attachment-link";
     link.href = file.url;
     link.target = "_blank";
@@ -511,6 +849,7 @@
     name.textContent = file.name;
 
     link.append(icon, name);
+
     return link;
   }
 
@@ -521,12 +860,17 @@
       if (!ids || !ids.length) return;
 
       const button = document.createElement("button");
+
       button.className = "reaction-btn";
       button.type = "button";
       button.textContent = `${emoji} ${ids.length}`;
       button.title = "Click to toggle your reaction";
+
       button.addEventListener("click", () => {
-        socket.emit("reaction:toggle", { messageId, emoji });
+        socket.emit("reaction:toggle", {
+          messageId,
+          emoji
+        });
       });
 
       container.append(button);
@@ -534,21 +878,32 @@
   }
 
   function scrollToBottom() {
-    ui.messages.scrollTop = ui.messages.scrollHeight;
+    requestAnimationFrame(() => {
+      ui.messages.scrollTop = ui.messages.scrollHeight;
+
+      requestAnimationFrame(() => {
+        ui.messages.scrollTop = ui.messages.scrollHeight;
+      });
+    });
   }
 
   // Theme popup and selection.
   const themeModal = $("themeModal");
   const openThemes = $("openThemes");
   const closeThemes = $("closeThemes");
-  const themeOptions = [...document.querySelectorAll("[data-theme-choice]")];
+
+  const themeOptions = [
+    ...document.querySelectorAll("[data-theme-choice]")
+  ];
 
   function applyTheme(theme) {
     const safeTheme = themes.includes(theme) ? theme : "midnight";
+
     document.body.dataset.theme = safeTheme;
 
     themeOptions.forEach(option => {
       const selected = option.dataset.themeChoice === safeTheme;
+
       option.classList.toggle("selected", selected);
       option.setAttribute("aria-pressed", String(selected));
     });
@@ -592,7 +947,10 @@
   });
 
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape" && themeModal.classList.contains("open")) {
+    if (
+      event.key === "Escape" &&
+      themeModal.classList.contains("open")
+    ) {
       closeThemeModal();
     }
   });
@@ -600,13 +958,17 @@
   themeOptions.forEach(option => {
     option.addEventListener("click", () => {
       const theme = option.dataset.themeChoice;
+
       applyTheme(theme);
 
       try {
         localStorage.setItem("tempchat-theme", theme);
       } catch (_) {}
 
-      showToast(`${option.querySelector("strong").textContent} theme applied`);
+      showToast(
+        `${option.querySelector("strong").textContent} theme applied`
+      );
+
       closeThemeModal();
     });
   });
@@ -627,29 +989,4 @@
     ui.roomCode.value = inviteCode;
     setTimeout(() => ui.joinName.focus(), 100);
   }
-})();
-// Theme popup click fix
-(() => {
-  const modal = document.getElementById("themeModal");
-  const open = document.getElementById("openThemes");
-  const close = document.getElementById("closeThemes");
-
-  if (!modal || !open || !close) return;
-
-  open.addEventListener("click", () => {
-    modal.classList.add("open");
-    modal.setAttribute("aria-hidden", "false");
-  });
-
-  close.addEventListener("click", () => {
-    modal.classList.remove("open");
-    modal.setAttribute("aria-hidden", "true");
-  });
-
-  modal.querySelectorAll("[data-close-themes]").forEach(el => {
-    el.addEventListener("click", () => {
-      modal.classList.remove("open");
-      modal.setAttribute("aria-hidden", "true");
-    });
-  });
 })();
