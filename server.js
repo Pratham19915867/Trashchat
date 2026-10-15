@@ -1,322 +1,391 @@
+
 const express = require("express");
 const http = require("http");
 const path = require("path");
-const fs = require("fs");
 const crypto = require("crypto");
+const fs = require("fs");
 const multer = require("multer");
 const { Server } = require("socket.io");
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { maxHttpBufferSize: 1e6 });
+const io = new Server(server);
 
-const PORT = Number(process.env.PORT || 3000);
-const MESSAGE_TTL_SECONDS = clampInt(process.env.MESSAGE_TTL_SECONDS, 60, 86400, 600);
-const MAX_UPLOAD_MB = clampInt(process.env.MAX_UPLOAD_MB, 1, 20, 8);
-const MAX_ROOM_MEMBERS = clampInt(process.env.MAX_ROOM_MEMBERS, 2, 100, 30);
-const UPLOAD_DIR = path.join(__dirname, "uploads");
-const PUBLIC_DIR = path.join(__dirname, "public");
+const PORT = process.env.PORT || 3000;
+const MESSAGE_TTL_SECONDS = 600;
+const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_FILE_SIZE = 8 * 1024 * 1024;
 
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-// This version is intentionally memory-based: uploaded files from a previous
-// process are removed on startup so old attachments do not linger.
-for (const file of fs.readdirSync(UPLOAD_DIR)) {
-  if (file !== ".gitkeep") {
-    try { fs.unlinkSync(path.join(UPLOAD_DIR, file)); } catch {}
-  }
-}
+const rooms = new Map();
+const uploadDir = path.join(__dirname, "uploads");
 
-app.disable("x-powered-by");
-app.use(express.static(PUBLIC_DIR));
-app.use("/uploads", express.static(UPLOAD_DIR, {
-  dotfiles: "deny",
-  index: false,
-  maxAge: "1h"
-}));
+fs.mkdirSync(uploadDir, { recursive: true });
 
-const allowedMime = new Set([
-  "image/jpeg", "image/png", "image/gif", "image/webp",
-  "application/pdf", "text/plain",
-  "application/zip",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-]);
+app.use(express.json());
+app.use(express.static(path.join(__dirname, "public")));
 
 const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
+  destination: (_req, _file, cb) => cb(null, uploadDir),
   filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).slice(0, 12).replace(/[^.\w-]/g, "");
-    cb(null, crypto.randomBytes(18).toString("hex") + ext);
+    const ext = path.extname(file.originalname).slice(0, 15);
+    cb(null, crypto.randomUUID() + ext);
   }
 });
+
+const allowedExtensions = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".webp",
+  ".pdf", ".txt", ".zip", ".docx", ".xlsx"
+]);
+
 const upload = multer({
   storage,
-  limits: { fileSize: MAX_UPLOAD_MB * 1024 * 1024, files: 1 },
+  limits: { fileSize: MAX_FILE_SIZE },
   fileFilter: (_req, file, cb) => {
-    if (allowedMime.has(file.mimetype)) return cb(null, true);
-    cb(new Error("File type not allowed. Upload an image, PDF, TXT, ZIP, DOCX or XLSX."));
+    const ext = path.extname(file.originalname).toLowerCase();
+
+    if (!allowedExtensions.has(ext)) {
+      return cb(new Error("This file type is not allowed."));
+    }
+
+    cb(null, true);
   }
 });
 
-const rooms = new Map(); // roomCode -> { members: Map(socketId -> member), messages: [], expiresAt }
-const socketInfo = new Map(); // socketId -> { roomCode, member }
-const messageTimers = new Map(); // messageId -> timer
-
-function clampInt(value, min, max, fallback) {
-  const n = Number(value);
-  return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
-}
-function cleanText(value, max = 500) {
-  return String(value ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, "").trim().slice(0, max);
-}
-function makeCode() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code;
-  do {
-    code = Array.from({ length: 6 }, () => alphabet[crypto.randomInt(alphabet.length)]).join("");
-  } while (rooms.has(code));
-  return code;
-}
-function publicMember(member) {
-  return { id: member.id, name: member.name, color: member.color };
-}
-function roomSnapshot(room) {
-  return {
-    members: [...room.members.values()].map(publicMember),
-    messages: room.messages.map(m => ({ ...m, reactions: { ...m.reactions } })),
-    expiresAt: room.expiresAt,
-    messageTtlSeconds: MESSAGE_TTL_SECONDS
-  };
-}
-function emitMembers(code) {
-  const room = rooms.get(code);
-  if (room) io.to(code).emit("members:update", [...room.members.values()].map(publicMember));
-}
-function removeFile(fileUrl) {
-  if (!fileUrl || !fileUrl.startsWith("/uploads/")) return;
-  const name = path.basename(fileUrl);
-  fs.unlink(path.join(UPLOAD_DIR, name), () => {});
-}
-function removeMessage(code, messageId) {
-  const room = rooms.get(code);
-  if (!room) return;
-  const index = room.messages.findIndex(m => m.id === messageId);
-  if (index === -1) return;
-  const [message] = room.messages.splice(index, 1);
-  if (message.file) removeFile(message.file.url);
-  messageTimers.delete(messageId);
-  io.to(code).emit("message:deleted", { id: messageId });
-}
-function scheduleMessageExpiry(code, message) {
-  const timer = setTimeout(() => removeMessage(code, message.id), MESSAGE_TTL_SECONDS * 1000);
-  timer.unref?.();
-  messageTimers.set(message.id, timer);
-}
-function getSocketRoom(socket) {
-  const info = socketInfo.get(socket.id);
-  if (!info) return null;
-  const room = rooms.get(info.roomCode);
-  if (!room) return null;
-  return { ...info, room };
-}
-function leaveCurrentRoom(socket) {
-  const info = socketInfo.get(socket.id);
-  if (!info) return;
-  const room = rooms.get(info.roomCode);
-  socket.leave(info.roomCode);
-  socketInfo.delete(socket.id);
-  if (room) {
-    room.members.delete(socket.id);
-    if (room.members.size === 0) {
-      for (const message of room.messages) {
-        const timer = messageTimers.get(message.id);
-        if (timer) clearTimeout(timer);
-        messageTimers.delete(message.id);
-        if (message.file) removeFile(message.file.url);
-      }
-      rooms.delete(info.roomCode);
-    } else {
-      emitMembers(info.roomCode);
-      io.to(info.roomCode).emit("system:message", {
-        id: crypto.randomUUID(), text: `${info.member.name} left the room`,
-        createdAt: Date.now(), expiresAt: Date.now() + MESSAGE_TTL_SECONDS * 1000
-      });
-    }
-  }
-}
-function addMessage(code, payload) {
-  const room = rooms.get(code);
-  if (!room) return null;
-  const message = {
-    id: crypto.randomUUID(),
-    senderId: payload.senderId,
-    senderName: payload.senderName,
-    senderColor: payload.senderColor,
-    text: payload.text || "",
-    file: payload.file || null,
-    createdAt: Date.now(),
-    expiresAt: Date.now() + MESSAGE_TTL_SECONDS * 1000,
-    reactions: {}
-  };
-  room.messages.push(message);
-  scheduleMessageExpiry(code, message);
-  io.to(code).emit("message:new", message);
-  return message;
-}
-
-app.get("/health", (_req, res) => res.json({ ok: true, rooms: rooms.size }));
-app.post("/api/upload", (req, res) => {
-  upload.single("file")(req, res, err => {
-    if (err) {
-      const tooLarge = err.code === "LIMIT_FILE_SIZE";
-      return res.status(tooLarge ? 413 : 400).json({
-        error: tooLarge ? `File is too large. Maximum size is ${MAX_UPLOAD_MB} MB.` : err.message
-      });
-    }
-    if (!req.file) return res.status(400).json({ error: "Choose a file first." });
-    const file = {
-      name: path.basename(req.file.originalname).slice(0, 120),
-      url: `/uploads/${req.file.filename}`,
-      mime: req.file.mimetype,
-      size: req.file.size
-    };
-    res.json({ file });
+app.get("/health", (_req, res) => {
+  res.json({
+    ok: true,
+    rooms: rooms.size,
+    uptime: Math.floor(process.uptime())
   });
 });
+
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, rooms: rooms.size });
+});
+
+app.post("/api/upload", (req, res) => {
+  upload.single("file")(req, res, error => {
+    if (error) {
+      return res.status(400).json({
+        error: error.code === "LIMIT_FILE_SIZE"
+          ? "File must be 8 MB or smaller."
+          : error.message
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: "Choose a file first." });
+    }
+
+    res.json({
+      ok: true,
+      file: {
+        name: path.basename(req.file.originalname),
+        url: "/uploads/" + encodeURIComponent(req.file.filename),
+        size: req.file.size,
+        mime: req.file.mimetype
+      }
+    });
+  });
+});
+
+app.use("/uploads", express.static(uploadDir, {
+  fallthrough: false,
+  dotfiles: "deny",
+  index: false
+}));
+
+function createRoomCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    let code = "";
+
+    for (let i = 0; i < 6; i++) {
+      code += chars[crypto.randomInt(chars.length)];
+    }
+
+    if (!rooms.has(code)) return code;
+  }
+
+  throw new Error("Could not generate a room code. Try again.");
+}
+
+function cleanName(value) {
+  if (typeof value !== "string") return "Guest";
+
+  const name = value.trim().replace(/\s+/g, " ").slice(0, 24);
+  return name || "Guest";
+}
+
+function makeSnapshot(room) {
+  return {
+    messageTtlSeconds: MESSAGE_TTL_SECONDS,
+    members: [...room.members.values()].map(member => ({
+      id: member.id,
+      name: member.name,
+      color: member.color
+    })),
+    messages: room.messages
+  };
+}
+
+function getSocketRoom(socket) {
+  if (!socket.data.roomCode) return null;
+  return rooms.get(socket.data.roomCode) || null;
+}
+
+function removeMember(socket) {
+  const code = socket.data.roomCode;
+  if (!code) return;
+
+  const room = rooms.get(code);
+  socket.data.roomCode = null;
+
+  if (!room) return;
+
+  room.members.delete(socket.id);
+  socket.leave(code);
+
+  io.to(code).emit(
+    "members:update",
+    [...room.members.values()].map(member => ({
+      id: member.id,
+      name: member.name,
+      color: member.color
+    }))
+  );
+
+  if (room.members.size === 0) {
+    room.lastEmptyAt = Date.now();
+  }
+}
+
+function enterRoom(socket, code, name, callback) {
+  const room = rooms.get(code);
+
+  if (!room) {
+    return callback({
+      ok: false,
+      error: "Room not found. Check the code or create a new room."
+    });
+  }
+
+  // Validate the target room before leaving the current room.
+  removeMember(socket);
+
+  const member = {
+    id: socket.id,
+    name: cleanName(name),
+    color: "#" + crypto.randomBytes(3).toString("hex")
+  };
+
+  room.members.set(socket.id, member);
+  room.lastEmptyAt = null;
+  room.updatedAt = Date.now();
+
+  socket.data.roomCode = code;
+  socket.join(code);
+
+  socket.to(code).emit("system:message", {
+    text: `${member.name} joined the room.`
+  });
+
+  io.to(code).emit(
+    "members:update",
+    [...room.members.values()].map(m => ({
+      id: m.id,
+      name: m.name,
+      color: m.color
+    }))
+  );
+
+  callback({
+    ok: true,
+    code,
+    snapshot: makeSnapshot(room)
+  });
+}
+
+function getMember(room, socket) {
+  return room?.members.get(socket.id) || null;
+}
+
+function cleanExpiredMessages(room) {
+  const cutoff = Date.now() - MESSAGE_TTL_SECONDS * 1000;
+  room.messages = room.messages.filter(message => message.createdAt > cutoff);
+}
 
 io.on("connection", socket => {
   socket.on("room:create", (data = {}, callback = () => {}) => {
-    leaveCurrentRoom(socket);
-    const name = cleanText(data.name, 24) || "Guest";
-    const code = makeCode();
-    const member = { id: socket.id, name, color: colorFor(name) };
-    const room = { members: new Map([[socket.id, member]]), messages: [], expiresAt: Date.now() + 6 * 60 * 60 * 1000 };
-    rooms.set(code, room);
-    socket.join(code);
-    socketInfo.set(socket.id, { roomCode: code, member });
-    callback({ ok: true, code, snapshot: roomSnapshot(room) });
+    try {
+      const code = createRoomCode();
+
+      rooms.set(code, {
+        code,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        lastEmptyAt: null,
+        members: new Map(),
+        messages: new Map()
+      });
+
+      // A room may be empty briefly while its creator joins.
+      const room = rooms.get(code);
+
+      room.messages = [];
+      enterRoom(socket, code, data.name, callback);
+    } catch (error) {
+      callback({ ok: false, error: error.message });
+    }
   });
 
   socket.on("room:join", (data = {}, callback = () => {}) => {
-    leaveCurrentRoom(socket);
-    const code = cleanText(data.code, 6).toUpperCase();
-    const room = rooms.get(code);
-    if (!room) return callback({ ok: false, error: "Room not found. Check the code or create a new room." });
-    if (room.members.size >= MAX_ROOM_MEMBERS) return callback({ ok: false, error: "This room is full." });
-    const name = cleanText(data.name, 24) || "Guest";
-    const member = { id: socket.id, name, color: colorFor(name) };
-    room.members.set(socket.id, member);
-    socket.join(code);
-    socketInfo.set(socket.id, { roomCode: code, member });
-    callback({ ok: true, code, snapshot: roomSnapshot(room) });
-    emitMembers(code);
-    io.to(code).emit("system:message", {
-      id: crypto.randomUUID(), text: `${name} joined the room`,
-      createdAt: Date.now(), expiresAt: Date.now() + MESSAGE_TTL_SECONDS * 1000
-    });
+    const code = String(data.code || "").trim().toUpperCase();
+
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      return callback({ ok: false, error: "Enter a valid 6-character room code." });
+    }
+
+    enterRoom(socket, code, data.name, callback);
   });
 
   socket.on("message:send", (data = {}, callback = () => {}) => {
-    const current = getSocketRoom(socket);
-    if (!current) return callback({ ok: false, error: "Join a room first." });
-    const text = cleanText(data.text, 2000);
-    if (!text) return callback({ ok: false, error: "Write a message first." });
-    if (current.room.messages.filter(m => m.senderId === socket.id && Date.now() - m.createdAt < 5000).length >= 8) {
-      return callback({ ok: false, error: "Slow down a little before sending more messages." });
+    const room = getSocketRoom(socket);
+    const member = getMember(room, socket);
+    const text = typeof data.text === "string" ? data.text.trim() : "";
+
+    if (!room || !member) {
+      return callback({ ok: false, error: "Join a room first." });
     }
-    const message = addMessage(current.roomCode, {
-      senderId: socket.id, senderName: current.member.name,
-      senderColor: current.member.color, text
-    });
-    callback({ ok: Boolean(message) });
+
+    if (!text || text.length > 2000) {
+      return callback({ ok: false, error: "Message must be 1–2000 characters." });
+    }
+
+    cleanExpiredMessages(room);
+
+    const message = {
+      id: crypto.randomUUID(),
+      senderId: socket.id,
+      senderName: member.name,
+      senderColor: member.color,
+      text,
+      createdAt: Date.now(),
+      reactions: {}
+    };
+
+    room.messages.push(message);
+    room.updatedAt = Date.now();
+
+    io.to(room.code).emit("message:new", message);
+    callback({ ok: true, id: message.id });
   });
 
   socket.on("file:share", (data = {}, callback = () => {}) => {
-    const current = getSocketRoom(socket);
-    if (!current) return callback({ ok: false, error: "Join a room first." });
+    const room = getSocketRoom(socket);
+    const member = getMember(room, socket);
     const file = data.file;
-    if (!file || typeof file.url !== "string" || !file.url.startsWith("/uploads/")) {
-      return callback({ ok: false, error: "Invalid attachment." });
+
+    if (!room || !member) {
+      return callback({ ok: false, error: "Join a room first." });
     }
-    const safeName = path.basename(String(file.name || "attachment")).slice(0, 120);
-    const urlName = path.basename(file.url);
-    const diskPath = path.join(UPLOAD_DIR, urlName);
-    if (!fs.existsSync(diskPath)) return callback({ ok: false, error: "Attachment expired or not found." });
-    const stat = fs.statSync(diskPath);
-    if (stat.size > MAX_UPLOAD_MB * 1024 * 1024) return callback({ ok: false, error: "Attachment is too large." });
-    const message = addMessage(current.roomCode, {
-      senderId: socket.id, senderName: current.member.name,
-      senderColor: current.member.color, text: "",
-      file: { name: safeName, url: file.url, mime: String(file.mime || ""), size: stat.size }
-    });
-    callback({ ok: Boolean(message) });
+
+    if (!file || typeof file.url !== "string" ||
+        !file.url.startsWith("/uploads/") ||
+        typeof file.name !== "string") {
+      return callback({ ok: false, error: "Invalid file information." });
+    }
+
+    const message = {
+      id: crypto.randomUUID(),
+      senderId: socket.id,
+      senderName: member.name,
+      senderColor: member.color,
+      text: "",
+      file: {
+        name: path.basename(file.name).slice(0, 200),
+        url: file.url,
+        size: Number(file.size) || 0,
+        mime: String(file.mime || "application/octet-stream")
+      },
+      createdAt: Date.now(),
+      reactions: {}
+    };
+
+    room.messages.push(message);
+    room.updatedAt = Date.now();
+
+    io.to(room.code).emit("message:new", message);
+    callback({ ok: true, id: message.id });
   });
 
   socket.on("reaction:toggle", (data = {}, callback = () => {}) => {
-    const current = getSocketRoom(socket);
-    if (!current) return callback({ ok: false });
-    const message = current.room.messages.find(m => m.id === data.messageId);
+    const room = getSocketRoom(socket);
+    if (!room) return;
+
+    const message = room.messages.find(m => m.id === data.messageId);
     const emoji = String(data.emoji || "");
-    const allowed = new Set(["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀"]);
-    if (!message || !allowed.has(emoji)) return callback({ ok: false });
-    message.reactions[emoji] ||= [];
-    const ids = message.reactions[emoji];
-    const index = ids.indexOf(socket.id);
-    if (index >= 0) ids.splice(index, 1); else ids.push(socket.id);
-    if (!ids.length) delete message.reactions[emoji];
-    io.to(current.roomCode).emit("reaction:update", { messageId: message.id, reactions: message.reactions });
-    callback({ ok: true });
+
+    const allowed = ["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀"];
+
+    if (!message || !allowed.includes(emoji)) return;
+
+    if (!message.reactions[emoji]) message.reactions[emoji] = [];
+
+    const users = message.reactions[emoji];
+    const index = users.indexOf(socket.id);
+
+    if (index >= 0) users.splice(index, 1);
+    else users.push(socket.id);
+
+    if (users.length === 0) delete message.reactions[emoji];
+
+    io.to(room.code).emit("reaction:update", {
+      messageId: message.id,
+      reactions: message.reactions
+    });
+
+    if (typeof callback === "function") callback({ ok: true });
   });
 
   socket.on("room:reset", (callback = () => {}) => {
-    const current = getSocketRoom(socket);
-    if (!current) return callback({ ok: false, error: "Join a room first." });
-    for (const message of current.room.messages) {
-      const timer = messageTimers.get(message.id);
-      if (timer) clearTimeout(timer);
-      messageTimers.delete(message.id);
-      if (message.file) removeFile(message.file.url);
+    const room = getSocketRoom(socket);
+
+    if (!room) {
+      return callback({ ok: false, error: "Join a room first." });
     }
-    current.room.messages = [];
-    io.to(current.roomCode).emit("room:cleared");
+
+    room.messages = [];
+    room.updatedAt = Date.now();
+
+    io.to(room.code).emit("room:cleared");
     callback({ ok: true });
   });
 
-  socket.on("disconnect", () => leaveCurrentRoom(socket));
+  socket.on("disconnect", () => {
+    removeMember(socket);
+  });
 });
 
-function colorFor(name) {
-  const colors = ["#b8a1ff", "#7dd3fc", "#f9a8d4", "#86efac", "#fcd34d", "#c4b5fd"];
-  let hash = 0;
-  for (const char of name) hash = (hash * 31 + char.charCodeAt(0)) | 0;
-  return colors[Math.abs(hash) % colors.length];
-}
-
-// Remove stale empty rooms if an unusual disconnect path leaves one behind.
+// Expire old messages and remove abandoned rooms.
 setInterval(() => {
   const now = Date.now();
+
   for (const [code, room] of rooms) {
-    if (room.expiresAt < now) {
-      for (const message of room.messages) {
-        const timer = messageTimers.get(message.id);
-        if (timer) clearTimeout(timer);
-        messageTimers.delete(message.id);
-        if (message.file) removeFile(message.file.url);
+    cleanExpiredMessages(room);
+
+    if (room.members.size === 0) {
+      if (!room.lastEmptyAt) room.lastEmptyAt = now;
+
+      if (now - room.lastEmptyAt > ROOM_TTL_MS) {
+        rooms.delete(code);
+        io.to(code).emit("room:expired");
       }
-      for (const socketId of room.members.keys()) {
-        const socket = io.sockets.sockets.get(socketId);
-        if (socket) {
-          socket.leave(code);
-          socketInfo.delete(socketId);
-          socket.emit("room:expired");
-        }
-      }
-      rooms.delete(code);
     }
   }
-}, 60_000).unref?.();
+}, 60 * 1000).unref();
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`TempChat 2.0 running at http://localhost:${PORT}`);
-  console.log(`Message lifetime: ${MESSAGE_TTL_SECONDS}s | Upload limit: ${MAX_UPLOAD_MB}MB`);
+  console.log(`TempChat server listening on port ${PORT}`);
 });
