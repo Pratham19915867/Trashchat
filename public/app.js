@@ -628,3 +628,28 @@
     setTimeout(() => ui.joinName.focus(), 100);
   }
 })();
+// Theme popup click fix
+(() => {
+  const modal = document.getElementById("themeModal");
+  const open = document.getElementById("openThemes");
+  const close = document.getElementById("closeThemes");
+
+  if (!modal || !open || !close) return;
+
+  open.addEventListener("click", () => {
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  });
+
+  close.addEventListener("click", () => {
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+  });
+
+  modal.querySelectorAll("[data-close-themes]").forEach(el => {
+    el.addEventListener("click", () => {
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+    });
+  });
+})();
