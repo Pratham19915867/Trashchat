@@ -175,3 +175,45 @@ body[data-theme="light"] .brand-mark{color:#202238}
 @keyframes modal-in{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
 @media(max-width:800px){.shell{width:calc(100% - 28px)}.chat-layout{grid-template-columns:205px minmax(0,1fr);gap:10px}.room-sidebar{padding:15px 12px}.conversation-header{padding:0 15px}.messages{padding:16px}.message-row{max-width:96%}}
 @media(max-width:620px){.shell{width:calc(100% - 24px)}.topbar{min-height:68px;flex-wrap:wrap;padding:10px 0}.brand{font-size:19px}.topbar-right{gap:8px}.connection-status{font-size:9px}.theme-trigger{padding:9px 11px}.lobby{padding:35px 0 28px}.hero{margin-bottom:27px}h1{letter-spacing:-2px}.hero-copy{font-size:12px;padding:0 8px}.entry-grid{grid-template-columns:1fr;gap:12px}.glass-card{padding:21px;border-radius:19px}.glass-card p{min-height:0;margin-bottom:15px}.trust-row{gap:12px;font-size:9px}.page-footer{font-size:9px}.page-footer span:last-child{max-width:52%;text-align:right}.chat-layout{position:relative;display:block;min-height:calc(100dvh - 115px);max-height:calc(100dvh - 115px);margin:12px 0}.conversation{height:100%;min-height:0}.room-sidebar{display:none;position:absolute;z-index:5;inset:0 auto 0 0;width:min(280px,85%);background:var(--bg);box-shadow:15px 0 50px #0007}.room-sidebar.show-mobile{display:flex}.conversation-header{min-height:67px;padding:0 12px}.temporary-badge{font-size:8px;padding:6px}.mobile-only{display:inline-block}.messages{padding:13px 10px}.composer{margin:0 9px;gap:6px;min-height:50px}.composer-hint{display:none}.composer-footer{padding:9px 12px 10px}.composer-footer span:last-child{display:none}.message-row{max-width:98%;gap:7px}.message-avatar{width:25px;height:25px}.bubble{font-size:12px;padding:9px 10px}.conversation-title h2{font-size:13px}.conversation-title p{font-size:9px}.empty-state h3{font-size:13px}.empty-state p{font-size:10px}.theme-panel{padding:15px;border-radius:22px}.theme-grid{gap:10px}.theme-option{padding:10px;border-radius:18px}.theme-option.selected{padding:9px}.theme-preview{height:42px}.theme-option strong{font-size:12px}.theme-option small{font-size:10px}}
+/* FIX: Theme popup visibility and clickability */
+#themeModal {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 99999 !important;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+#themeModal.open {
+  display: flex !important;
+}
+
+#themeModal .theme-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+#themeModal .theme-panel {
+  position: relative;
+  z-index: 1;
+  width: min(520px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  pointer-events: auto;
+}
+
+#themeModal button {
+  position: relative;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+#openThemes {
+  position: relative;
+  z-index: 2;
+  pointer-events: auto;
+  cursor: pointer;
+}
