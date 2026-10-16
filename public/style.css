@@ -1799,3 +1799,43 @@ body {
   margin-top: auto;
   flex-shrink: 0;
 }
+
+/* FIX: Remove the sharp bottom background edge */
+html {
+  min-height: 100%;
+  background: #050e18;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: #050e18;
+  background-image: radial-gradient(
+    ellipse at 50% 0%,
+    #12606b 0%,
+    #071522 62%,
+    #050e18 100%
+  );
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+  background-size: cover;
+}
+
+/* Keep the landing page footer inside the same layout */
+.shell {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Prevent decorative background blobs from creating visible edges */
+.ambient {
+  pointer-events: none;
+}
+
+/* Avoid an unwanted horizontal scrollbar */
+html,
+body {
+  max-width: 100%;
+  overflow-x: clip;
+}
