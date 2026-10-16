@@ -1,4 +1,4 @@
-```javascript
+
 (() => {
   const socket = io();
   const $ = id => document.getElementById(id);
@@ -48,7 +48,119 @@
 
   const typingUsers = new Map();
 
-  // Keep the viewport fixed and allow the message list to scroll.
+  // --------------------------------------------------
+  // PUBLIC ROOMS UI
+  // --------------------------------------------------
+
+  const publicControls = document.createElement("div");
+  publicControls.id = "publicRoomControls";
+  publicControls.style.cssText =
+    "margin:14px 0;padding:14px;border:1px solid var(--border,#4444);" +
+    "border-radius:12px;";
+
+  const publicLabel = document.createElement("label");
+  publicLabel.style.cssText =
+    "display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:600;";
+
+  const publicCheckbox = document.createElement("input");
+  publicCheckbox.type = "checkbox";
+  publicCheckbox.id = "createPublicRoom";
+
+  const publicLabelText = document.createElement("span");
+  publicLabelText.textContent = "Make this room public";
+
+  publicLabel.append(publicCheckbox, publicLabelText);
+
+  const publicHint = document.createElement("p");
+  publicHint.textContent =
+    "Public rooms appear in the list below. Anyone can join them.";
+  publicHint.style.cssText =
+    "font-size:12px;opacity:.75;margin:8px 0 0;";
+
+  publicControls.append(publicLabel, publicHint);
+
+  if (ui.createBtn?.parentElement) {
+    ui.createBtn.parentElement.insertBefore(
+      publicControls,
+      ui.createBtn
+    );
+  }
+
+  const publicRoomsPanel = document.createElement("section");
+  publicRoomsPanel.id = "publicRoomsPanel";
+  publicRoomsPanel.style.cssText =
+    "margin-top:18px;padding:14px;border:1px solid var(--border,#4444);" +
+    "border-radius:12px;";
+
+  const publicRoomsTitle = document.createElement("h3");
+  publicRoomsTitle.textContent = "Public Rooms";
+  publicRoomsTitle.style.cssText = "margin:0 0 12px;";
+
+  const publicRoomsList = document.createElement("div");
+  publicRoomsList.textContent = "Connecting to public rooms...";
+
+  publicRoomsPanel.append(publicRoomsTitle, publicRoomsList);
+
+  if (ui.lobbyError?.parentElement) {
+    ui.lobbyError.insertAdjacentElement("afterend", publicRoomsPanel);
+  } else if (ui.lobby) {
+    ui.lobby.append(publicRoomsPanel);
+  }
+
+  function renderPublicRooms(rooms) {
+    publicRoomsList.replaceChildren();
+
+    if (!Array.isArray(rooms) || rooms.length === 0) {
+      const empty = document.createElement("p");
+      empty.textContent = "No public rooms yet. Create one!";
+      empty.style.cssText = "font-size:13px;opacity:.7;";
+      publicRoomsList.append(empty);
+      return;
+    }
+
+    rooms.forEach(room => {
+      if (!room || !/^[A-Z0-9]{6}$/.test(room.code || "")) return;
+
+      const row = document.createElement("div");
+      row.style.cssText =
+        "display:flex;align-items:center;justify-content:space-between;" +
+        "gap:12px;padding:10px 0;border-bottom:1px solid var(--border,#4443);";
+
+      const details = document.createElement("div");
+
+      const code = document.createElement("strong");
+      code.textContent = room.code;
+
+      const count = document.createElement("div");
+      count.textContent =
+        `${Number(room.members) || 0} ${(Number(room.members) || 0) === 1 ? "member" : "members"}`;
+      count.style.cssText = "font-size:12px;opacity:.7;margin-top:4px;";
+
+      details.append(code, count);
+
+      const joinButton = document.createElement("button");
+      joinButton.type = "button";
+      joinButton.textContent = "Join";
+
+      joinButton.addEventListener("click", () => {
+        const joinName = ui.joinName?.value?.trim();
+        const createName = ui.createName?.value?.trim();
+        const name = (joinName || createName || "Guest")
+          .replace(/\s+/g, " ")
+          .slice(0, 24);
+
+        enterRoom("room:join", {
+          name: name || "Guest",
+          code: room.code
+        });
+      });
+
+      row.append(details, joinButton);
+      publicRoomsList.append(row);
+    });
+  }
+
+  // Keep viewport fixed and allow the message list to scroll.
   const enhancementStyles = document.createElement("style");
 
   enhancementStyles.textContent = `
@@ -140,6 +252,17 @@
         animation: none !important;
       }
     }
+
+    #publicRoomControls input[type="checkbox"] {
+      width: 17px;
+      height: 17px;
+      accent-color: var(--accent, #8b5cf6);
+    }
+
+    #publicRoomsPanel button {
+      cursor: pointer;
+      flex-shrink: 0;
+    }
   `;
 
   document.head.appendChild(enhancementStyles);
@@ -156,7 +279,10 @@
     );
   }
 
-  // Audio notifications.
+  // --------------------------------------------------
+  // AUDIO NOTIFICATIONS
+  // --------------------------------------------------
+
   function playSound(kind = "message") {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -198,7 +324,10 @@
     }
   }
 
-  // Scroll helpers: never force a user away from older messages.
+  // --------------------------------------------------
+  // SCROLL AND TYPING HELPERS
+  // --------------------------------------------------
+
   function isNearBottom() {
     const el = ui.messages;
     if (!el) return true;
@@ -215,9 +344,7 @@
   }
 
   function scrollIfNearBottom(wasNearBottom) {
-    if (wasNearBottom) {
-      scrollToBottom();
-    }
+    if (wasNearBottom) scrollToBottom();
   }
 
   function sendTypingState(typing) {
@@ -257,21 +384,43 @@
     typingIndicator.appendChild(dots);
   }
 
+  // --------------------------------------------------
+  // CONNECTION STATUS
+  // --------------------------------------------------
+
   socket.on("connect", () => {
-    ui.connectionLabel.textContent = "Connected";
+    if (ui.connectionLabel) {
+      ui.connectionLabel.textContent = "Connected";
+    }
+
+    socket.emit("rooms:public:list");
   });
 
   socket.on("disconnect", () => {
-    ui.connectionLabel.textContent = "Reconnecting…";
+    if (ui.connectionLabel) {
+      ui.connectionLabel.textContent = "Reconnecting…";
+    }
+
     typingUsers.clear();
     renderTypingUsers();
+    renderPublicRooms([]);
   });
 
   socket.on("connect_error", () => {
-    ui.connectionLabel.textContent = "Connection issue";
+    if (ui.connectionLabel) {
+      ui.connectionLabel.textContent = "Connection issue";
+    }
   });
 
+  socket.on("rooms:public:update", renderPublicRooms);
+
+  // --------------------------------------------------
+  // TOAST AND ERROR HELPERS
+  // --------------------------------------------------
+
   function showToast(message) {
+    if (!ui.toast) return;
+
     ui.toast.textContent = message;
     ui.toast.classList.add("show");
 
@@ -297,6 +446,10 @@
     return `${seconds} sec`;
   }
 
+  // --------------------------------------------------
+  // ENTER AND LEAVE ROOM
+  // --------------------------------------------------
+
   function setRoom(code, snapshot) {
     currentCode = code;
     isTyping = false;
@@ -308,23 +461,20 @@
     ui.activeRoomCode.textContent = code;
     ui.lobby.classList.add("hidden");
     ui.chat.classList.remove("hidden");
-    ui.chatError.textContent = "";
 
+    if (ui.chatError) ui.chatError.textContent = "";
     ui.messages.replaceChildren();
 
-    if (snapshot.messageTtlSeconds) {
+    if (snapshot.messageTtlSeconds && ui.ttlLabel) {
       ui.ttlLabel.textContent = formatDuration(snapshot.messageTtlSeconds);
     }
 
     const messages = snapshot.messages || [];
-
     messages.forEach(message => addMessage(message, true));
 
     renderMembers(snapshot.members || []);
 
-    if (!messages.length) {
-      showEmptyState();
-    }
+    if (!messages.length) showEmptyState();
 
     history.replaceState({}, "", `/?room=${encodeURIComponent(code)}`);
 
@@ -335,9 +485,49 @@
   function enterRoom(eventName, data, target = "lobbyError") {
     showError("", target);
 
-    socket.emit(eventName, data, result => {
+    if (!socket.connected) {
+      showError(
+        "Server se connection nahi hai. Page refresh karke try karo.",
+        target
+      );
+      return;
+    }
+
+    const button =
+      eventName === "room:create" ? ui.createBtn :
+      eventName === "room:join" ? ui.joinBtn : null;
+
+    const originalText = button?.textContent || "";
+
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Please wait...";
+    }
+
+    socket.timeout(8000).emit(eventName, data, (error, result) => {
+      if (button) {
+        button.disabled = false;
+        button.textContent = originalText;
+      }
+
+      if (error) {
+        showError(
+          "Server se response nahi aaya. Render Logs check karo.",
+          target
+        );
+        return;
+      }
+
       if (!result?.ok) {
-        showError(result?.error || "Something went wrong.", target);
+        showError(
+          result?.error || "Room create/join nahi ho paya.",
+          target
+        );
+        return;
+      }
+
+      if (!result.code || !result.snapshot) {
+        showError("Server ka response incomplete hai.", target);
         return;
       }
 
@@ -347,7 +537,8 @@
 
   ui.createBtn.addEventListener("click", () => {
     enterRoom("room:create", {
-      name: nameValue("createName")
+      name: nameValue("createName"),
+      isPublic: publicCheckbox.checked
     });
   });
 
@@ -373,9 +564,7 @@
   });
 
   ui.roomCode.addEventListener("keydown", event => {
-    if (event.key === "Enter") {
-      ui.joinBtn.click();
-    }
+    if (event.key === "Enter") ui.joinBtn.click();
   });
 
   function leaveRoom() {
@@ -388,7 +577,7 @@
     clearTimeout(typingTimer);
 
     ui.uploadPreview.classList.add("hidden");
-    ui.uploadPreview.innerHTML = "";
+    ui.uploadPreview.replaceChildren();
     ui.fileInput.value = "";
 
     ui.chat.classList.add("hidden");
@@ -397,9 +586,14 @@
     document.querySelector(".room-sidebar")?.classList.remove("show-mobile");
 
     history.replaceState({}, "", "/");
+    socket.emit("rooms:public:list");
   }
 
   ui.backBtn.addEventListener("click", leaveRoom);
+
+  // --------------------------------------------------
+  // COPY ROOM CODE AND INVITE
+  // --------------------------------------------------
 
   async function copyText(text) {
     try {
@@ -433,6 +627,10 @@
     }
   });
 
+  // --------------------------------------------------
+  // MOBILE SIDEBAR
+  // --------------------------------------------------
+
   const sidebar = document.querySelector(".room-sidebar");
 
   ui.mobileMembersBtn.addEventListener("click", () => {
@@ -450,8 +648,10 @@
     }
   });
 
-  // Clear chat locally after the server confirms the reset.
-  // The server broadcasts room:cleared to everyone in the room.
+  // --------------------------------------------------
+  // RESET ROOM MESSAGES
+  // --------------------------------------------------
+
   ui.resetBtn.addEventListener("click", () => {
     if (!currentCode) {
       showError("Join a room first.", "chatError");
@@ -465,11 +665,19 @@
     ui.resetBtn.disabled = true;
     showError("", "chatError");
 
-    socket.emit("room:reset", result => {
+    socket.timeout(8000).emit("room:reset", (error, result) => {
       ui.resetBtn.disabled = false;
 
+      if (error) {
+        showError("Server se response nahi aaya.", "chatError");
+        return;
+      }
+
       if (!result?.ok) {
-        showError(result?.error || "Could not clear messages.", "chatError");
+        showError(
+          result?.error || "Could not clear messages.",
+          "chatError"
+        );
         return;
       }
 
@@ -478,7 +686,10 @@
     });
   });
 
-  // Typing indicator.
+  // --------------------------------------------------
+  // TYPING INDICATOR
+  // --------------------------------------------------
+
   ui.messageInput.addEventListener("input", () => {
     if (!currentCode) return;
 
@@ -499,17 +710,27 @@
     sendTypingState(false);
   });
 
-  // Submit a text message.
+  // --------------------------------------------------
+  // SEND TEXT MESSAGE
+  // --------------------------------------------------
+
   ui.messageForm.addEventListener("submit", event => {
     event.preventDefault();
 
     const text = ui.messageInput.value.trim();
-
     if (!text || !currentCode) return;
 
-    socket.emit("message:send", { text }, result => {
+    socket.timeout(8000).emit("message:send", { text }, (error, result) => {
+      if (error) {
+        showError("Message send nahi hua. Dobara try karo.", "chatError");
+        return;
+      }
+
       if (!result?.ok) {
-        showError(result?.error || "Message could not be sent.", "chatError");
+        showError(
+          result?.error || "Message could not be sent.",
+          "chatError"
+        );
         return;
       }
 
@@ -522,6 +743,10 @@
     });
   });
 
+  // --------------------------------------------------
+  // FILE UPLOAD AND SHARING
+  // --------------------------------------------------
+
   ui.attachBtn.addEventListener("click", () => {
     ui.fileInput.click();
   });
@@ -530,7 +755,7 @@
     const file = ui.fileInput.files?.[0];
     if (!file) return;
 
-    ui.uploadPreview.innerHTML = "";
+    ui.uploadPreview.replaceChildren();
 
     const label = document.createElement("span");
     label.textContent = `Selected: ${file.name} (${formatBytes(file.size)})`;
@@ -553,10 +778,20 @@
   function clearSelectedFile() {
     ui.fileInput.value = "";
     ui.uploadPreview.classList.add("hidden");
-    ui.uploadPreview.innerHTML = "";
+    ui.uploadPreview.replaceChildren();
   }
 
   async function uploadAndSend(file) {
+    if (!currentCode) {
+      showError("Join a room first.", "chatError");
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      showError("File must be 8 MB or smaller.", "chatError");
+      return;
+    }
+
     const button = ui.uploadPreview.querySelector("button");
 
     if (button) {
@@ -581,21 +816,28 @@
         throw new Error(result.error || "Upload failed.");
       }
 
-      socket.emit("file:share", { file: result.file }, answer => {
-        if (!answer?.ok) {
-          showError(answer?.error || "Could not share file.", "chatError");
+      socket.timeout(8000).emit(
+        "file:share",
+        { file: result.file },
+        (error, answer) => {
+          if (error || !answer?.ok) {
+            showError(
+              answer?.error || "Could not share file. Try again.",
+              "chatError"
+            );
 
-          if (button) {
-            button.disabled = false;
-            button.textContent = "Try again";
+            if (button) {
+              button.disabled = false;
+              button.textContent = "Try again";
+            }
+
+            return;
           }
 
-          return;
+          clearSelectedFile();
+          playSound("sent");
         }
-
-        clearSelectedFile();
-        playSound("sent");
-      });
+      );
     } catch (error) {
       showError(error.message || "Upload failed.", "chatError");
 
@@ -611,6 +853,10 @@
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
+
+  // --------------------------------------------------
+  // SOCKET EVENTS
+  // --------------------------------------------------
 
   socket.on("members:update", renderMembers);
 
@@ -649,10 +895,7 @@
     if (!node) return;
 
     const bar = node.querySelector(".reaction-bar");
-
-    if (bar) {
-      renderReactionCounts(bar, messageId, data);
-    }
+    if (bar) renderReactionCounts(bar, messageId, data);
   });
 
   socket.on("room:cleared", () => {
@@ -673,13 +916,16 @@
   }
 
   function clearMessages() {
-    // Remove all messages, attachments and previous empty-state markup.
     ui.messages.replaceChildren();
     typingUsers.clear();
     renderTypingUsers();
     showEmptyState();
     scrollToBottom();
   }
+
+  // --------------------------------------------------
+  // MEMBERS LIST
+  // --------------------------------------------------
 
   function initials(name) {
     return (name || "G")
@@ -692,12 +938,14 @@
   }
 
   function renderMembers(members) {
+    if (!ui.memberCount || !ui.headerMembers || !ui.membersList) return;
+
     ui.memberCount.textContent = members.length;
 
     ui.headerMembers.textContent =
       `${members.length} ${members.length === 1 ? "person" : "people"} here`;
 
-    ui.membersList.innerHTML = "";
+    ui.membersList.replaceChildren();
 
     members.forEach(member => {
       const row = document.createElement("div");
@@ -734,6 +982,10 @@
     });
   }
 
+  // --------------------------------------------------
+  // MESSAGE RENDERING
+  // --------------------------------------------------
+
   function showEmptyState() {
     if (ui.messages.querySelector(".empty-state")) return;
 
@@ -760,14 +1012,11 @@
     node.textContent = text;
 
     ui.messages.append(node);
-
     scrollIfNearBottom(shouldFollow);
   }
 
   function addMessage(message, forceScroll = false) {
     if (!message || !message.id) return;
-
-    // Duplicate detection is limited to the current message list.
     if (findMessageNode(message.id)) return;
 
     const hasMessages = Boolean(
@@ -788,9 +1037,7 @@
     row.dataset.messageId = message.id;
     row.classList.add("tc-new-message");
 
-    if (!mine) {
-      playSound("received");
-    }
+    if (!mine) playSound("received");
 
     const avatar = document.createElement("div");
     avatar.className = "message-avatar";
@@ -809,6 +1056,7 @@
 
     const time = document.createElement("time");
     const createdAt = Number(message.createdAt);
+
     time.textContent = new Date(
       Number.isFinite(createdAt) ? createdAt : Date.now()
     ).toLocaleTimeString([], {
@@ -865,9 +1113,12 @@
     row.append(avatar, content);
     ui.messages.append(row);
 
-    // Only follow new content if the user was already at the bottom.
     scrollIfNearBottom(shouldFollow);
   }
+
+  // --------------------------------------------------
+  // FILE DISPLAY
+  // --------------------------------------------------
 
   function renderFile(file) {
     const wrap = document.createElement("div");
@@ -904,7 +1155,6 @@
       `${file.name} · ${formatBytes(file.size || 0)}`;
 
     wrap.append(caption);
-
     return wrap;
   }
 
@@ -924,9 +1174,12 @@
     name.textContent = file.name;
 
     link.append(icon, name);
-
     return link;
   }
+
+  // --------------------------------------------------
+  // REACTIONS
+  // --------------------------------------------------
 
   function renderReactionCounts(container, messageId, data) {
     container.replaceChildren();
@@ -935,7 +1188,6 @@
       if (!ids || !ids.length) return;
 
       const button = document.createElement("button");
-
       button.className = "reaction-btn";
       button.type = "button";
       button.textContent = `${emoji} ${ids.length}`;
@@ -952,7 +1204,10 @@
     });
   }
 
-  // Theme popup and selection.
+  // --------------------------------------------------
+  // THEME POPUP AND SELECTION
+  // --------------------------------------------------
+
   const themeModal = $("themeModal");
   const openThemes = $("openThemes");
   const closeThemes = $("closeThemes");
@@ -991,30 +1246,34 @@
   }
 
   function openThemeModal() {
+    if (!themeModal) return;
+
     themeModal.classList.add("open");
     themeModal.setAttribute("aria-hidden", "false");
     document.body.classList.add("theme-modal-open");
-    closeThemes.focus();
+    closeThemes?.focus();
   }
 
   function closeThemeModal() {
+    if (!themeModal) return;
+
     themeModal.classList.remove("open");
     themeModal.setAttribute("aria-hidden", "true");
     document.body.classList.remove("theme-modal-open");
-    openThemes.focus();
+    openThemes?.focus();
   }
 
-  openThemes.addEventListener("click", openThemeModal);
-  closeThemes.addEventListener("click", closeThemeModal);
+  openThemes?.addEventListener("click", openThemeModal);
+  closeThemes?.addEventListener("click", closeThemeModal);
 
-  themeModal.querySelectorAll("[data-close-themes]").forEach(element => {
+  themeModal?.querySelectorAll("[data-close-themes]").forEach(element => {
     element.addEventListener("click", closeThemeModal);
   });
 
   document.addEventListener("keydown", event => {
     if (
       event.key === "Escape" &&
-      themeModal.classList.contains("open")
+      themeModal?.classList.contains("open")
     ) {
       closeThemeModal();
     }
@@ -1046,13 +1305,18 @@
 
   applyTheme(savedTheme);
 
-  // Pre-fill room code from an invite link.
+  // --------------------------------------------------
+  // PREFILL ROOM CODE FROM INVITE LINK
+  // --------------------------------------------------
+
   const params = new URLSearchParams(location.search);
   const inviteCode = (params.get("room") || "").toUpperCase();
 
   if (/^[A-Z0-9]{6}$/.test(inviteCode)) {
     ui.roomCode.value = inviteCode;
-    setTimeout(() => ui.joinName.focus(), 100);
+
+    setTimeout(() => {
+      ui.joinName?.focus();
+    }, 100);
   }
 })();
-```
