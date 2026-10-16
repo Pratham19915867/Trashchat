@@ -1,3 +1,4 @@
+```javascript
 (() => {
   const socket = io();
   const $ = id => document.getElementById(id);
@@ -33,6 +34,7 @@
   };
 
   const reactions = ["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀"];
+
   const themes = [
     "midnight", "aurora", "ocean", "sakura", "desert",
     "dark", "mono", "graphite", "ice", "ember"
@@ -46,9 +48,26 @@
 
   const typingUsers = new Map();
 
-  // Animation styles and typing indicator are created automatically.
+  // Keep the viewport fixed and allow the message list to scroll.
   const enhancementStyles = document.createElement("style");
+
   enhancementStyles.textContent = `
+    html, body {
+      max-width: 100%;
+    }
+
+    #messages {
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      overflow-anchor: auto;
+      scroll-behavior: auto;
+    }
+
+    #messages > * {
+      overflow-anchor: auto;
+    }
+
     #tempchatTyping {
       min-height: 18px;
       padding: 2px 14px 6px;
@@ -122,6 +141,7 @@
       }
     }
   `;
+
   document.head.appendChild(enhancementStyles);
 
   const typingIndicator = document.createElement("div");
@@ -136,7 +156,7 @@
     );
   }
 
-  // Small notification sounds using the browser's Web Audio API.
+  // Audio notifications.
   function playSound(kind = "message") {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -174,7 +194,29 @@
         oscillator.stop(startAt + 0.13);
       });
     } catch (_) {
-      // Audio is optional; chat keeps working if sound is unavailable.
+      // Audio is optional.
+    }
+  }
+
+  // Scroll helpers: never force a user away from older messages.
+  function isNearBottom() {
+    const el = ui.messages;
+    if (!el) return true;
+
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+  }
+
+  function scrollToBottom() {
+    if (!ui.messages) return;
+
+    requestAnimationFrame(() => {
+      ui.messages.scrollTop = ui.messages.scrollHeight;
+    });
+  }
+
+  function scrollIfNearBottom(wasNearBottom) {
+    if (wasNearBottom) {
+      scrollToBottom();
     }
   }
 
@@ -215,17 +257,6 @@
     typingIndicator.appendChild(dots);
   }
 
-  // Keep messages visible when the message area changes size.
-  const messageResizeObserver = typeof ResizeObserver !== "undefined"
-    ? new ResizeObserver(() => {
-        if (!ui.chat.classList.contains("hidden")) {
-          scrollToBottom();
-        }
-      })
-    : null;
-
-  messageResizeObserver?.observe(ui.messages);
-
   socket.on("connect", () => {
     ui.connectionLabel.textContent = "Connected";
   });
@@ -252,7 +283,8 @@
   }
 
   function showError(message, target = "lobbyError") {
-    $(target).textContent = message || "";
+    const element = $(target);
+    if (element) element.textContent = message || "";
   }
 
   function nameValue(id) {
@@ -268,29 +300,34 @@
   function setRoom(code, snapshot) {
     currentCode = code;
     isTyping = false;
+
     typingUsers.clear();
     renderTypingUsers();
-
     playSound("room");
 
     ui.activeRoomCode.textContent = code;
     ui.lobby.classList.add("hidden");
     ui.chat.classList.remove("hidden");
     ui.chatError.textContent = "";
-    ui.messages.innerHTML = "";
+
+    ui.messages.replaceChildren();
 
     if (snapshot.messageTtlSeconds) {
       ui.ttlLabel.textContent = formatDuration(snapshot.messageTtlSeconds);
     }
 
-    (snapshot.messages || []).forEach(addMessage);
+    const messages = snapshot.messages || [];
+
+    messages.forEach(message => addMessage(message, true));
+
     renderMembers(snapshot.members || []);
 
-    if (!(snapshot.messages || []).length) {
+    if (!messages.length) {
       showEmptyState();
     }
 
     history.replaceState({}, "", `/?room=${encodeURIComponent(code)}`);
+
     ui.messageInput.focus();
     scrollToBottom();
   }
@@ -352,6 +389,8 @@
 
     ui.uploadPreview.classList.add("hidden");
     ui.uploadPreview.innerHTML = "";
+    ui.fileInput.value = "";
+
     ui.chat.classList.add("hidden");
     ui.lobby.classList.remove("hidden");
 
@@ -411,22 +450,35 @@
     }
   });
 
+  // Clear chat locally after the server confirms the reset.
+  // The server broadcasts room:cleared to everyone in the room.
   ui.resetBtn.addEventListener("click", () => {
+    if (!currentCode) {
+      showError("Join a room first.", "chatError");
+      return;
+    }
+
     if (!confirm("Clear every message and attachment in this room for everyone?")) {
       return;
     }
 
+    ui.resetBtn.disabled = true;
+    showError("", "chatError");
+
     socket.emit("room:reset", result => {
+      ui.resetBtn.disabled = false;
+
       if (!result?.ok) {
         showError(result?.error || "Could not clear messages.", "chatError");
         return;
       }
 
+      clearMessages();
       showToast("Room messages cleared");
     });
   });
 
-  // Typing indicator: send updates while the user types.
+  // Typing indicator.
   ui.messageInput.addEventListener("input", () => {
     if (!currentCode) return;
 
@@ -571,7 +623,6 @@
     playSound("system");
   });
 
-  // The server must emit this event to other users in the same room.
   socket.on("typing:update", data => {
     if (!data || data.id === socket.id) return;
 
@@ -585,22 +636,16 @@
   });
 
   socket.on("message:deleted", ({ id }) => {
-    const node = document.querySelector(
-      `[data-message-id="${CSS.escape(id)}"]`
-    );
-
+    const node = findMessageNode(id);
     if (node) node.remove();
 
-    if (!ui.messages.querySelector(".message-row")) {
+    if (!ui.messages.querySelector(".message-row, .system-message")) {
       showEmptyState();
     }
   });
 
   socket.on("reaction:update", ({ messageId, reactions: data }) => {
-    const node = document.querySelector(
-      `[data-message-id="${CSS.escape(messageId)}"]`
-    );
-
+    const node = findMessageNode(messageId);
     if (!node) return;
 
     const bar = node.querySelector(".reaction-bar");
@@ -611,8 +656,7 @@
   });
 
   socket.on("room:cleared", () => {
-    ui.messages.innerHTML = "";
-    showEmptyState();
+    clearMessages();
     showToast("Room messages cleared");
   });
 
@@ -620,6 +664,22 @@
     leaveRoom();
     showToast("This room expired. Create a new one to continue.");
   });
+
+  function findMessageNode(id) {
+    if (!id) return null;
+
+    return [...ui.messages.querySelectorAll("[data-message-id]")]
+      .find(node => node.dataset.messageId === String(id)) || null;
+  }
+
+  function clearMessages() {
+    // Remove all messages, attachments and previous empty-state markup.
+    ui.messages.replaceChildren();
+    typingUsers.clear();
+    renderTypingUsers();
+    showEmptyState();
+    scrollToBottom();
+  }
 
   function initials(name) {
     return (name || "G")
@@ -689,8 +749,10 @@
   }
 
   function addSystemMessage(text) {
+    const shouldFollow = isNearBottom();
+
     if (ui.messages.querySelector(".empty-state")) {
-      ui.messages.innerHTML = "";
+      ui.messages.replaceChildren();
     }
 
     const node = document.createElement("div");
@@ -698,20 +760,25 @@
     node.textContent = text;
 
     ui.messages.append(node);
-    scrollToBottom();
+
+    scrollIfNearBottom(shouldFollow);
   }
 
-  function addMessage(message) {
-    if (
-      document.querySelector(
-        `[data-message-id="${CSS.escape(message.id)}"]`
-      )
-    ) {
-      return;
-    }
+  function addMessage(message, forceScroll = false) {
+    if (!message || !message.id) return;
+
+    // Duplicate detection is limited to the current message list.
+    if (findMessageNode(message.id)) return;
+
+    const hasMessages = Boolean(
+      ui.messages.querySelector(".message-row, .system-message")
+    );
+
+    const shouldFollow =
+      forceScroll || !hasMessages || isNearBottom();
 
     if (ui.messages.querySelector(".empty-state")) {
-      ui.messages.innerHTML = "";
+      ui.messages.replaceChildren();
     }
 
     const mine = message.senderId === socket.id;
@@ -741,7 +808,10 @@
     name.textContent = message.senderName || "Guest";
 
     const time = document.createElement("time");
-    time.textContent = new Date(message.createdAt).toLocaleTimeString([], {
+    const createdAt = Number(message.createdAt);
+    time.textContent = new Date(
+      Number.isFinite(createdAt) ? createdAt : Date.now()
+    ).toLocaleTimeString([], {
       hour: "2-digit",
       minute: "2-digit"
     });
@@ -795,7 +865,8 @@
     row.append(avatar, content);
     ui.messages.append(row);
 
-    scrollToBottom();
+    // Only follow new content if the user was already at the bottom.
+    scrollIfNearBottom(shouldFollow);
   }
 
   function renderFile(file) {
@@ -809,11 +880,15 @@
       img.alt = file.name;
       img.loading = "lazy";
 
-      img.addEventListener("load", scrollToBottom);
+      img.addEventListener("load", () => {
+        if (isNearBottom()) scrollToBottom();
+      });
 
       img.addEventListener("error", () => {
+        const shouldFollow = isNearBottom();
         img.replaceWith(fileLink(file));
-        scrollToBottom();
+
+        if (shouldFollow) scrollToBottom();
       });
 
       wrap.append(img);
@@ -854,7 +929,7 @@
   }
 
   function renderReactionCounts(container, messageId, data) {
-    container.innerHTML = "";
+    container.replaceChildren();
 
     Object.entries(data || {}).forEach(([emoji, ids]) => {
       if (!ids || !ids.length) return;
@@ -874,16 +949,6 @@
       });
 
       container.append(button);
-    });
-  }
-
-  function scrollToBottom() {
-    requestAnimationFrame(() => {
-      ui.messages.scrollTop = ui.messages.scrollHeight;
-
-      requestAnimationFrame(() => {
-        ui.messages.scrollTop = ui.messages.scrollHeight;
-      });
     });
   }
 
@@ -966,7 +1031,7 @@
       } catch (_) {}
 
       showToast(
-        `${option.querySelector("strong").textContent} theme applied`
+        `${option.querySelector("strong")?.textContent || "Theme"} theme applied`
       );
 
       closeThemeModal();
@@ -990,3 +1055,4 @@
     setTimeout(() => ui.joinName.focus(), 100);
   }
 })();
+```
