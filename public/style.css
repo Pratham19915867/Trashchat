@@ -1767,3 +1767,35 @@ body:has(#chat:not(.hidden)) {
   }
 }
 ```
+/* FIX: Landing page bottom edge and scrollbar */
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+.shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  box-sizing: border-box;
+}
+
+.shell:has(#landing:not(.hidden)) {
+  min-height: 100vh;
+  min-height: 100dvh;
+  height: auto;
+  overflow: visible;
+}
+
+#landing:not(.hidden) {
+  flex-shrink: 0;
+}
+
+.page-footer {
+  margin-top: auto;
+  flex-shrink: 0;
+}
