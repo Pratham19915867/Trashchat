@@ -1664,3 +1664,106 @@ body:has(#chat:not(.hidden)) {
     flex-shrink: 0;
   }
 }
+```css
+/* =========================================
+   TEMPCHAT 2.0 — FIXED CHAT VIEWPORT
+   Paste at the VERY END of style.css
+   ========================================= */
+
+/* Prevent the page itself from scrolling while chatting */
+html,
+body {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+body:has(#chat:not(.hidden)) {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Keep the app inside the visible screen */
+.shell:has(#chat:not(.hidden)) {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Chat fills the space below the header */
+#chat.chat-layout {
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
+  max-height: none;
+  overflow: hidden;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* Sidebar and conversation must not expand with messages */
+#chat .room-sidebar,
+#chat .conversation {
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+#chat .conversation {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Header and composer remain fixed */
+#chat .conversation-header,
+#chat .composer,
+#chat .composer-footer,
+#chat .upload-preview {
+  flex-shrink: 0;
+}
+
+/* ONLY this area scrolls */
+#chat .messages {
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+/* Don't let the footer push the chat outside the screen */
+.shell:has(#chat:not(.hidden)) > .page-footer {
+  display: none;
+}
+
+/* Mobile layout */
+@media (max-width: 620px) {
+  #chat.chat-layout {
+    display: block;
+    flex: 1 1 0;
+    height: 0;
+    min-height: 0;
+    margin: 8px 0;
+    overflow: hidden;
+  }
+
+  #chat .conversation {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  #chat .messages {
+    height: 0;
+    min-height: 0;
+    flex: 1 1 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+}
+```
