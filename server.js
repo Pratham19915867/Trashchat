@@ -1,3 +1,4 @@
+
 const express = require("express");
 const http = require("http");
 const path = require("path");
@@ -54,6 +55,7 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     rooms: rooms.size,
+    publicRooms: [...rooms.values()].filter(r => r.isPublic).length,
     uptime: Math.floor(process.uptime())
   });
 });
@@ -120,6 +122,7 @@ function cleanName(value) {
 function makeSnapshot(room) {
   return {
     messageTtlSeconds: MESSAGE_TTL_SECONDS,
+    isPublic: room.isPublic,
     members: [...room.members.values()].map(member => ({
       id: member.id,
       name: member.name,
@@ -127,6 +130,21 @@ function makeSnapshot(room) {
     })),
     messages: room.messages
   };
+}
+
+function publicRoomList() {
+  return [...rooms.values()]
+    .filter(room => room.isPublic)
+    .map(room => ({
+      code: room.code,
+      members: room.members.size,
+      createdAt: room.createdAt
+    }))
+    .sort((a, b) => b.members - a.members);
+}
+
+function broadcastPublicRooms() {
+  io.emit("rooms:public:update", publicRoomList());
 }
 
 function getSocketRoom(socket) {
@@ -152,7 +170,6 @@ function broadcastMembers(code, room) {
 function stopTyping(socket, room, member) {
   if (!room || !member) return;
 
-  // Tell everyone else in the room that this member stopped typing.
   socket.to(room.code).emit("typing:update", {
     id: socket.id,
     name: member.name,
@@ -174,9 +191,7 @@ function removeMember(socket) {
 
   const member = room.members.get(socket.id);
 
-  if (member) {
-    stopTyping(socket, room, member);
-  }
+  if (member) stopTyping(socket, room, member);
 
   room.members.delete(socket.id);
   socket.leave(code);
@@ -186,9 +201,11 @@ function removeMember(socket) {
   if (room.members.size === 0) {
     room.lastEmptyAt = Date.now();
   }
+
+  if (room.isPublic) broadcastPublicRooms();
 }
 
-function enterRoom(socket, code, name, callback) {
+function enterRoom(socket, code, name, callback = () => {}) {
   const room = rooms.get(code);
 
   if (!room) {
@@ -198,7 +215,6 @@ function enterRoom(socket, code, name, callback) {
     });
   }
 
-  // Validate the target room before leaving the current room.
   removeMember(socket);
 
   const member = {
@@ -219,6 +235,7 @@ function enterRoom(socket, code, name, callback) {
   });
 
   broadcastMembers(code, room);
+  if (room.isPublic) broadcastPublicRooms();
 
   callback({
     ok: true,
@@ -236,30 +253,41 @@ function cleanExpiredMessages(room) {
 }
 
 io.on("connection", socket => {
-  // TYPING INDICATOR
-  // The client emits { typing: true } or { typing: false }.
+  // Send the current public-room list to this client.
+  socket.emit("rooms:public:update", publicRoomList());
+
+  // Client can request a fresh list at any time.
+  socket.on("rooms:public:list", (callback = () => {}) => {
+    const list = publicRoomList();
+    socket.emit("rooms:public:update", list);
+
+    if (typeof callback === "function") {
+      callback({ ok: true, rooms: list });
+    }
+  });
+
+  // Typing indicator.
   socket.on("typing:update", (data = {}) => {
     const room = getSocketRoom(socket);
     const member = getMember(room, socket);
 
     if (!room || !member) return;
 
-    const typing = data.typing === true;
-
-    // Relay only to other users in this same room.
     socket.to(room.code).emit("typing:update", {
       id: socket.id,
       name: member.name,
-      typing
+      typing: data.typing === true
     });
   });
 
+  // Create a room. Public is opt-in; rooms are private by default.
   socket.on("room:create", (data = {}, callback = () => {}) => {
     try {
       const code = createRoomCode();
 
       const room = {
         code,
+        isPublic: data.isPublic === true,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         lastEmptyAt: null,
@@ -269,15 +297,19 @@ io.on("connection", socket => {
 
       rooms.set(code, room);
 
-      enterRoom(socket, code, data.name, callback);
+      enterRoom(socket, code, data.name, result => {
+        if (room.isPublic) broadcastPublicRooms();
+        callback(result);
+      });
     } catch (error) {
       callback({
         ok: false,
-        error: error.message
+        error: error.message || "Could not create room."
       });
     }
   });
 
+  // Join by code (works for both public and private rooms).
   socket.on("room:join", (data = {}, callback = () => {}) => {
     const code = String(data.code || "").trim().toUpperCase();
 
@@ -291,6 +323,7 @@ io.on("connection", socket => {
     enterRoom(socket, code, data.name, callback);
   });
 
+  // Send a text message.
   socket.on("message:send", (data = {}, callback = () => {}) => {
     const room = getSocketRoom(socket);
     const member = getMember(room, socket);
@@ -299,10 +332,7 @@ io.on("connection", socket => {
       : "";
 
     if (!room || !member) {
-      return callback({
-        ok: false,
-        error: "Join a room first."
-      });
+      return callback({ ok: false, error: "Join a room first." });
     }
 
     if (!text || text.length > 2000) {
@@ -312,9 +342,7 @@ io.on("connection", socket => {
       });
     }
 
-    // Stop the sender's typing indicator when a message is sent.
     stopTyping(socket, room, member);
-
     cleanExpiredMessages(room);
 
     const message = {
@@ -331,23 +359,17 @@ io.on("connection", socket => {
     room.updatedAt = Date.now();
 
     io.to(room.code).emit("message:new", message);
-
-    callback({
-      ok: true,
-      id: message.id
-    });
+    callback({ ok: true, id: message.id });
   });
 
+  // Share an uploaded file.
   socket.on("file:share", (data = {}, callback = () => {}) => {
     const room = getSocketRoom(socket);
     const member = getMember(room, socket);
     const file = data.file;
 
     if (!room || !member) {
-      return callback({
-        ok: false,
-        error: "Join a room first."
-      });
+      return callback({ ok: false, error: "Join a room first." });
     }
 
     if (
@@ -382,72 +404,60 @@ io.on("connection", socket => {
     room.updatedAt = Date.now();
 
     io.to(room.code).emit("message:new", message);
-
-    callback({
-      ok: true,
-      id: message.id
-    });
+    callback({ ok: true, id: message.id });
   });
 
+  // Toggle message reaction.
   socket.on("reaction:toggle", (data = {}, callback = () => {}) => {
     const room = getSocketRoom(socket);
 
-    if (!room) return;
+    if (!room) {
+      return callback({ ok: false, error: "Join a room first." });
+    }
 
     const message = room.messages.find(
       item => item.id === data.messageId
     );
 
     const emoji = String(data.emoji || "");
-
     const allowed = [
       "👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀"
     ];
 
-    if (!message || !allowed.includes(emoji)) return;
-
-    if (!message.reactions[emoji]) {
-      message.reactions[emoji] = [];
+    if (!message || !allowed.includes(emoji)) {
+      return callback({ ok: false, error: "Invalid reaction." });
     }
+
+    if (!message.reactions[emoji]) message.reactions[emoji] = [];
 
     const users = message.reactions[emoji];
     const index = users.indexOf(socket.id);
 
-    if (index >= 0) {
-      users.splice(index, 1);
-    } else {
-      users.push(socket.id);
-    }
+    if (index >= 0) users.splice(index, 1);
+    else users.push(socket.id);
 
-    if (users.length === 0) {
-      delete message.reactions[emoji];
-    }
+    if (users.length === 0) delete message.reactions[emoji];
 
     io.to(room.code).emit("reaction:update", {
       messageId: message.id,
       reactions: message.reactions
     });
 
-    if (typeof callback === "function") {
-      callback({ ok: true });
-    }
+    callback({ ok: true });
   });
 
+  // Clear the room's messages.
   socket.on("room:reset", (callback = () => {}) => {
     const room = getSocketRoom(socket);
 
     if (!room) {
-      return callback({
-        ok: false,
-        error: "Join a room first."
-      });
+      return callback({ ok: false, error: "Join a room first." });
     }
 
     room.messages = [];
     room.updatedAt = Date.now();
 
     io.to(room.code).emit("room:cleared");
-
     callback({ ok: true });
   });
 
@@ -459,20 +469,22 @@ io.on("connection", socket => {
 // Expire old messages and remove abandoned rooms.
 setInterval(() => {
   const now = Date.now();
+  let publicListChanged = false;
 
   for (const [code, room] of rooms) {
     cleanExpiredMessages(room);
 
     if (room.members.size === 0) {
-      if (!room.lastEmptyAt) {
-        room.lastEmptyAt = now;
-      }
+      if (!room.lastEmptyAt) room.lastEmptyAt = now;
 
       if (now - room.lastEmptyAt > ROOM_TTL_MS) {
         rooms.delete(code);
+        if (room.isPublic) publicListChanged = true;
       }
     }
   }
+
+  if (publicListChanged) broadcastPublicRooms();
 }, 60 * 1000).unref();
 
 server.listen(PORT, "0.0.0.0", () => {
