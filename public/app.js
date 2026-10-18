@@ -1,4 +1,3 @@
-
 (() => {
   const socket = io();
   const $ = id => document.getElementById(id);
