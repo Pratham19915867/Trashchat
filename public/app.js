@@ -845,7 +845,16 @@
   callStatus.id = "tcCallStatus";
   callStatus.textContent = "Calls are available when you join a room.";
   callBar.append(callModeSelect, callTargetSelect, audioCallBtn, videoCallBtn, callStatus);
-  if (ui.chat) ui.chat.insertBefore(callBar, ui.chat.firstChild);
+  // Keep call controls INSIDE the conversation column, not as a separate
+  // grid child of #chat. This prevents the sidebar/chat layout from breaking.
+  if (ui.chat) {
+    const conversation = ui.chat.querySelector(".conversation");
+    const conversationHeader = conversation && conversation.querySelector(".conversation-header");
+    if (conversation) {
+      if (conversationHeader) conversation.insertBefore(callBar, conversationHeader);
+      else conversation.prepend(callBar);
+    }
+  }
 
   const callModal = document.createElement("div");
   callModal.id = "tcCallModal";
