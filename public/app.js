@@ -912,17 +912,6 @@
     refreshCallTargets(members);
   };
 
-  callModeSelect.addEventListener("change", () => {
-    callTargetSelect.disabled = callModeSelect.value !== "private" || callState.id !== null;
-    refreshCallTargets([...ui.membersList.querySelectorAll(".member")].map(row => ({
-      id: row.querySelector(".you-tag") ? socket.id : row.dataset.memberId,
-      name: row.querySelector(".member-name")?.textContent || "Member"
-    })).filter(member => member.id));
-    // Rebuild from the latest member event cache below if the sidebar has no IDs.
-    audioCallBtn.disabled = callState.id !== null || !currentCode || (callModeSelect.value === "private" && !callTargetSelect.value);
-    videoCallBtn.disabled = audioCallBtn.disabled;
-  });
-
   let lastMembers = [];
   socket.on("members:update", members => {
     lastMembers = Array.isArray(members) ? members : [];
@@ -1255,29 +1244,4 @@
 
   refreshCallTargets([]);
 
-})();
-// Theme popup click fix
-(() => {
-  const modal = document.getElementById("themeModal");
-  const open = document.getElementById("openThemes");
-  const close = document.getElementById("closeThemes");
-
-  if (!modal || !open || !close) return;
-
-  open.addEventListener("click", () => {
-    modal.classList.add("open");
-    modal.setAttribute("aria-hidden", "false");
-  });
-
-  close.addEventListener("click", () => {
-    modal.classList.remove("open");
-    modal.setAttribute("aria-hidden", "true");
-  });
-
-  modal.querySelectorAll("[data-close-themes]").forEach(el => {
-    el.addEventListener("click", () => {
-      modal.classList.remove("open");
-      modal.setAttribute("aria-hidden", "true");
-    });
-  });
 })();
