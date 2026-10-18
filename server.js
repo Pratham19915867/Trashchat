@@ -549,6 +549,12 @@ io.on("connection", socket => {
     if (call.mode === "private" && socket.id !== call.hostId && !call.invitedIds.has(socket.id)) {
       return callback({ ok: false, error: "You were not invited to this private call." });
     }
+    if (call.members.has(socket.id)) {
+      return callback({ ok: false, error: "You are already connected to this call." });
+    }
+    if (call.mode === "group" && !call.invitedIds.has(socket.id)) {
+      return callback({ ok: false, error: "You were not invited to this group call." });
+    }
 
     const existingMembers = [...call.members];
     call.members.add(socket.id);
@@ -584,12 +590,16 @@ io.on("connection", socket => {
 
   socket.on("call:reject", (data = {}, callback = () => {}) => {
     const call = callSessions.get(String(data.callId || ""));
-    if (call) {
+    if (call && call.invitedIds.has(socket.id)) {
+      call.invitedIds.delete(socket.id);
       io.to(call.hostId).emit("call:rejected", {
         callId: call.id,
         peerId: socket.id,
         peerName: getMember(getSocketRoom(socket), socket)?.name || "A member"
       });
+      if (call.members.size === 0 && call.invitedIds.size === 0) {
+        callSessions.delete(call.id);
+      }
     }
     callback({ ok: true });
   });
