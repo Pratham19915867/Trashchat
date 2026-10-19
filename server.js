@@ -16,7 +16,6 @@ const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
 
 const rooms = new Map();
-const callSessions = new Map();
 const uploadDir = path.join(__dirname, "uploads");
 
 fs.mkdirSync(uploadDir, { recursive: true });
@@ -215,7 +214,6 @@ function enterRoom(socket, code, name, callback = () => {}) {
     });
   }
 
-  cleanCallForSocket(socket);
   removeMember(socket);
 
   const member = {
@@ -253,30 +251,6 @@ function cleanExpiredMessages(room) {
   );
 }
 
-
-function getCallMember(socket) {
-  const room = getSocketRoom(socket);
-  const member = getMember(room, socket);
-  return room && member ? { room, member } : null;
-}
-
-function cleanCallForSocket(socket, notify = true) {
-  for (const [callId, call] of callSessions) {
-    if (!call.members.has(socket.id)) continue;
-    call.members.delete(socket.id);
-    if (notify) {
-      for (const peerId of call.members) {
-        io.to(peerId).emit("call:peer-left", { callId, peerId: socket.id });
-      }
-    }
-    if (call.members.size === 0) callSessions.delete(callId);
-  }
-}
-
-function safeCallMember(room, id) {
-  const member = room?.members.get(id);
-  return member ? { id: member.id, name: member.name, color: member.color } : null;
-}
 
 io.on("connection", socket => {
   // Send the current public-room list to this client.
@@ -487,138 +461,7 @@ io.on("connection", socket => {
     callback({ ok: true });
   });
 
-  // Start a private or group voice/video call.
-  socket.on("call:start", (data = {}, callback = () => {}) => {
-    const current = getCallMember(socket);
-    if (!current) return callback({ ok: false, error: "Join a room before calling." });
-
-    const type = data.type === "video" ? "video" : "audio";
-    const mode = data.mode === "private" ? "private" : "group";
-    let recipients = [];
-
-    if (mode === "private") {
-      const targetId = String(data.targetId || "");
-      const target = current.room.members.get(targetId);
-      if (!target || targetId === socket.id) {
-        return callback({ ok: false, error: "Choose an online room member." });
-      }
-      recipients = [target];
-    } else {
-      recipients = [...current.room.members.values()].filter(member => member.id !== socket.id);
-      if (recipients.length === 0) {
-        return callback({ ok: false, error: "No other members are online in this room yet." });
-      }
-    }
-
-    const callId = crypto.randomUUID();
-    const call = {
-      id: callId,
-      roomCode: current.room.code,
-      type,
-      mode,
-      hostId: socket.id,
-      hostName: current.member.name,
-      members: new Set([socket.id]),
-      invitedIds: new Set(recipients.map(member => member.id)),
-      createdAt: Date.now()
-    };
-    callSessions.set(callId, call);
-
-    for (const recipient of recipients) {
-      io.to(recipient.id).emit("call:incoming", {
-        callId,
-        type,
-        mode,
-        roomCode: current.room.code,
-        callerId: socket.id,
-        callerName: current.member.name,
-        callerColor: current.member.color
-      });
-    }
-
-    callback({ ok: true, callId, type, mode, roomCode: current.room.code });
-  });
-
-  // Accept an incoming call and return current participants.
-  socket.on("call:accept", (data = {}, callback = () => {}) => {
-    const current = getCallMember(socket);
-    const call = callSessions.get(String(data.callId || ""));
-    if (!current || !call || call.roomCode !== current.room.code) {
-      return callback({ ok: false, error: "This call is no longer available." });
-    }
-    if (call.mode === "private" && socket.id !== call.hostId && !call.invitedIds.has(socket.id)) {
-      return callback({ ok: false, error: "You were not invited to this private call." });
-    }
-    if (call.members.has(socket.id)) {
-      return callback({ ok: false, error: "You are already connected to this call." });
-    }
-    if (call.mode === "group" && !call.invitedIds.has(socket.id)) {
-      return callback({ ok: false, error: "You were not invited to this group call." });
-    }
-
-    const existingMembers = [...call.members];
-    call.members.add(socket.id);
-    const participants = existingMembers
-      .map(id => safeCallMember(current.room, id))
-      .filter(Boolean);
-
-    // Notify existing participants only; the joining client receives the
-    // participant list in its acknowledgement and waits for their offers.
-    for (const peerId of existingMembers) {
-      io.to(peerId).emit("call:peer-joined", {
-        callId,
-        peer: safeCallMember(current.room, socket.id),
-        type: call.type,
-        mode: call.mode
-      });
-    }
-
-    callback({ ok: true, callId, type: call.type, mode: call.mode, participants });
-  });
-
-  // Relay WebRTC offers, answers and ICE candidates only between call members.
-  socket.on("call:signal", (data = {}) => {
-    const call = callSessions.get(String(data.callId || ""));
-    const targetId = String(data.targetId || "");
-    if (!call || !call.members.has(socket.id) || !call.members.has(targetId)) return;
-    io.to(targetId).emit("call:signal", {
-      callId: call.id,
-      fromId: socket.id,
-      signal: data.signal
-    });
-  });
-
-  socket.on("call:reject", (data = {}, callback = () => {}) => {
-    const call = callSessions.get(String(data.callId || ""));
-    if (call && call.invitedIds.has(socket.id)) {
-      call.invitedIds.delete(socket.id);
-      io.to(call.hostId).emit("call:rejected", {
-        callId: call.id,
-        peerId: socket.id,
-        peerName: getMember(getSocketRoom(socket), socket)?.name || "A member"
-      });
-      if (call.members.size === 0 && call.invitedIds.size === 0) {
-        callSessions.delete(call.id);
-      }
-    }
-    callback({ ok: true });
-  });
-
-  socket.on("call:leave", (data = {}, callback = () => {}) => {
-    const callId = String(data.callId || "");
-    const call = callSessions.get(callId);
-    if (!call || !call.members.has(socket.id)) return callback({ ok: true });
-
-    call.members.delete(socket.id);
-    for (const peerId of call.members) {
-      io.to(peerId).emit("call:peer-left", { callId, peerId: socket.id });
-    }
-    if (call.members.size === 0) callSessions.delete(callId);
-    callback({ ok: true });
-  });
-
   socket.on("disconnect", () => {
-    cleanCallForSocket(socket);
     removeMember(socket);
   });
 });
@@ -627,10 +470,6 @@ io.on("connection", socket => {
 setInterval(() => {
   const now = Date.now();
   let publicListChanged = false;
-
-  for (const [callId, call] of callSessions) {
-    if (now - call.createdAt > 6 * 60 * 60 * 1000) callSessions.delete(callId);
-  }
 
   for (const [code, room] of rooms) {
     cleanExpiredMessages(room);
