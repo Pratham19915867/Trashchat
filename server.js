@@ -5,488 +5,54 @@ const crypto = require("crypto");
 const fs = require("fs");
 const multer = require("multer");
 const { Server } = require("socket.io");
-
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
-
 const PORT = process.env.PORT || 3000;
 const MESSAGE_TTL_SECONDS = 600;
 const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
+const REQUEST_TTL_MS = 60 * 1000;
 const MAX_FILE_SIZE = 8 * 1024 * 1024;
-
 const rooms = new Map();
+const joinRequests = new Map();
 const uploadDir = path.join(__dirname, "uploads");
-
 fs.mkdirSync(uploadDir, { recursive: true });
-
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadDir),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).slice(0, 15);
-    cb(null, crypto.randomUUID() + ext);
-  }
+const storage = multer.diskStorage({destination: (_req, _file, cb) => cb(null, uploadDir),filename: (_req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname).slice(0, 15))});
+const allowedExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".txt", ".zip", ".docx", ".xlsx"]);
+const upload = multer({storage, limits: {fileSize: MAX_FILE_SIZE}, fileFilter: (_req, file, cb) => allowedExtensions.has(path.extname(file.originalname).toLowerCase()) ? cb(null, true) : cb(new Error("This file type is not allowed."))});
+app.get("/health", (_req, res) => res.json({ok:true, rooms:rooms.size, publicRooms:[...rooms.values()].filter(r=>r.isPublic).length, uptime:Math.floor(process.uptime())}));
+app.get("/api/health", (_req,res)=>res.json({ok:true,rooms:rooms.size}));
+app.post("/api/upload",(req,res)=>upload.single("file")(req,res,error=>{if(error)return res.status(400).json({error:error.code==="LIMIT_FILE_SIZE"?"File must be 8 MB or smaller.":error.message});if(!req.file)return res.status(400).json({error:"Choose a file first."});res.json({ok:true,file:{name:path.basename(req.file.originalname),url:"/uploads/"+encodeURIComponent(req.file.filename),size:req.file.size,mime:req.file.mimetype}});}));
+app.use("/uploads",express.static(uploadDir,{fallthrough:false,dotfiles:"deny",index:false}));
+function createRoomCode(){const chars="ABCDEFGHJKLMNPQRSTUVWXYZ23456789";for(let attempt=0;attempt<30;attempt++){let code="";for(let i=0;i<6;i++)code+=chars[crypto.randomInt(chars.length)];if(!rooms.has(code))return code;}throw new Error("Could not generate a room code. Try again.");}
+function cleanName(value){if(typeof value!=="string")return "Guest";return value.trim().replace(/\s+/g," ").slice(0,24)||"Guest";}
+function makeSnapshot(room){return {messageTtlSeconds:MESSAGE_TTL_SECONDS,isPublic:room.isPublic,members:[...room.members.values()].map(m=>({id:m.id,name:m.name,color:m.color})),messages:room.messages};}
+function publicRoomList(){return [...rooms.values()].filter(r=>r.isPublic&&r.members.size>0).map(r=>({code:r.code,members:r.members.size,createdAt:r.createdAt})).sort((a,b)=>b.members-a.members);}
+function broadcastPublicRooms(){io.emit("rooms:public:update",publicRoomList());}
+function getSocketRoom(socket){return socket.data.roomCode?rooms.get(socket.data.roomCode)||null:null;}
+function getMember(room,socket){return room?.members.get(socket.id)||null;}
+function broadcastMembers(code,room){io.to(code).emit("members:update",[...room.members.values()].map(m=>({id:m.id,name:m.name,color:m.color})));}
+function stopTyping(socket,room,member){if(room&&member)socket.to(room.code).emit("typing:update",{id:socket.id,name:member.name,typing:false});}
+function removeMember(socket){const code=socket.data.roomCode;if(!code)return;const room=rooms.get(code);socket.data.roomCode=null;if(!room){socket.leave(code);return;}const member=room.members.get(socket.id);if(member)stopTyping(socket,room,member);room.members.delete(socket.id);socket.leave(code);broadcastMembers(code,room);if(room.members.size===0)room.lastEmptyAt=Date.now();if(room.isPublic)broadcastPublicRooms();}
+function enterRoom(socket,code,name,callback=()=>{}){const room=rooms.get(code);if(!room)return callback({ok:false,error:"Room not found. Check the code or create a new room."});removeMember(socket);const member={id:socket.id,name:cleanName(name),color:"#"+crypto.randomBytes(3).toString("hex")};room.members.set(socket.id,member);room.lastEmptyAt=null;room.updatedAt=Date.now();socket.data.roomCode=code;socket.join(code);socket.to(code).emit("system:message",{text:`${member.name} joined the room.`});broadcastMembers(code,room);if(room.isPublic)broadcastPublicRooms();callback({ok:true,code,snapshot:makeSnapshot(room)});}
+function cleanExpiredMessages(room){const cutoff=Date.now()-MESSAGE_TTL_SECONDS*1000;room.messages=room.messages.filter(m=>m.createdAt>cutoff);}
+function rejectPendingForRoom(code,status="expired"){for(const [requestId,r] of joinRequests){if(r.code===code){const requester=io.sockets.sockets.get(r.requesterId);if(requester)requester.emit("room:request:result",{status,code});joinRequests.delete(requestId);}}}
+io.on("connection",socket=>{
+ socket.emit("rooms:public:update",publicRoomList());
+ socket.on("rooms:public:list",(callback=()=>{})=>{const list=publicRoomList();socket.emit("rooms:public:update",list);if(typeof callback==="function")callback({ok:true,rooms:list});});
+ socket.on("typing:update",data=>{const room=getSocketRoom(socket),member=getMember(room,socket);if(!room||!member)return;socket.to(room.code).emit("typing:update",{id:socket.id,name:member.name,typing:data?.typing===true});});
+ socket.on("room:create",(data={},callback=()=>{})=>{try{const code=createRoomCode();const room={code,isPublic:data.isPublic!==false,ownerId:socket.id,createdAt:Date.now(),updatedAt:Date.now(),lastEmptyAt:null,members:new Map(),messages:[]};rooms.set(code,room);enterRoom(socket,code,data.name,result=>{broadcastPublicRooms();callback(result);});}catch(error){callback({ok:false,error:error.message||"Could not create room."});}});
+ socket.on("room:join",(data={},callback=()=>{})=>{const code=String(data.code||"").trim().toUpperCase();if(!/^[A-Z0-9]{6}$/.test(code))return callback({ok:false,error:"Enter a valid 6-character room code."});enterRoom(socket,code,data.name,callback);});
+ // Clicking a public room creates a pending request; it never adds the requester before approval.
+ socket.on("room:request",(data={},callback=()=>{})=>{const code=String(data.code||"").trim().toUpperCase(),room=rooms.get(code);if(!room||!room.isPublic||room.members.size===0)return callback({ok:false,error:"This room is no longer online."});if(room.members.has(socket.id))return callback({ok:false,error:"You are already in this room."});if(room.ownerId===socket.id)return callback({ok:false,error:"You are the host of this room."});for(const [id,r] of joinRequests){if(r.requesterId===socket.id&&r.code===code){return callback({ok:true,status:"pending",requestId:id});}}const host=io.sockets.sockets.get(room.ownerId);if(!host||!room.members.has(room.ownerId))return callback({ok:false,error:"The room host is offline. Try another room."});const requestId=crypto.randomUUID();const request={requestId,code,name:cleanName(data.name),requesterId:socket.id,hostId:room.ownerId,createdAt:Date.now()};joinRequests.set(requestId,request);host.emit("room:join-request",{requestId,code,name:request.name});callback({ok:true,status:"pending",requestId});});
+ socket.on("room:request:answer",(data={},callback=()=>{})=>{const request=joinRequests.get(String(data.requestId||""));if(!request)return callback({ok:false,error:"This request has expired or was already handled."});if(request.hostId!==socket.id)return callback({ok:false,error:"Only the room host can answer this request."});const room=rooms.get(request.code);if(!room||room.ownerId!==socket.id||!room.members.has(socket.id)){joinRequests.delete(request.requestId);return callback({ok:false,error:"You are no longer the host of this room."});}joinRequests.delete(request.requestId);const requester=io.sockets.sockets.get(request.requesterId);if(!requester){return callback({ok:true,status:"gone"});}if(data.allow!==true){requester.emit("room:request:result",{status:"rejected",code:request.code});return callback({ok:true,status:"rejected"});}enterRoom(requester,request.code,request.name,result=>{if(result.ok)requester.emit("room:request:result",{status:"approved",code:result.code,snapshot:result.snapshot});callback({ok:true,status:"approved"});});});
+ socket.on("message:send",(data={},callback=()=>{})=>{const room=getSocketRoom(socket),member=getMember(room,socket),text=typeof data.text==="string"?data.text.trim():"";if(!room||!member)return callback({ok:false,error:"Join a room first."});if(!text||text.length>2000)return callback({ok:false,error:"Message must be 1–2000 characters."});stopTyping(socket,room,member);cleanExpiredMessages(room);const message={id:crypto.randomUUID(),senderId:socket.id,senderName:member.name,senderColor:member.color,text,createdAt:Date.now(),reactions:{}};room.messages.push(message);room.updatedAt=Date.now();io.to(room.code).emit("message:new",message);callback({ok:true,id:message.id});});
+ socket.on("file:share",(data={},callback=()=>{})=>{const room=getSocketRoom(socket),member=getMember(room,socket),file=data.file;if(!room||!member)return callback({ok:false,error:"Join a room first."});if(!file||typeof file.url!=="string"||!file.url.startsWith("/uploads/")||typeof file.name!=="string")return callback({ok:false,error:"Invalid file information."});const message={id:crypto.randomUUID(),senderId:socket.id,senderName:member.name,senderColor:member.color,text:"",file:{name:path.basename(file.name).slice(0,200),url:file.url,size:Number(file.size)||0,mime:String(file.mime||"application/octet-stream")},createdAt:Date.now(),reactions:{}};room.messages.push(message);room.updatedAt=Date.now();io.to(room.code).emit("message:new",message);callback({ok:true,id:message.id});});
+ socket.on("reaction:toggle",(data={},callback=()=>{})=>{const room=getSocketRoom(socket);if(!room||!getMember(room,socket))return callback({ok:false,error:"Join a room first."});const message=room.messages.find(m=>m.id===data.messageId),emoji=String(data.emoji||""),allowed=["👍","❤️","😂","😮","😢","🔥","🎉","👀"];if(!message||!allowed.includes(emoji))return callback({ok:false,error:"Invalid reaction."});if(!message.reactions[emoji])message.reactions[emoji]=[];const users=message.reactions[emoji],index=users.indexOf(socket.id);if(index>=0)users.splice(index,1);else users.push(socket.id);if(!users.length)delete message.reactions[emoji];io.to(room.code).emit("reaction:update",{messageId:message.id,reactions:message.reactions});callback({ok:true});});
+ socket.on("room:reset",callback=>{const room=getSocketRoom(socket);if(!room||!getMember(room,socket))return callback({ok:false,error:"Join a room first."});room.messages=[];room.updatedAt=Date.now();io.to(room.code).emit("room:cleared");callback({ok:true});});
+ socket.on("disconnect",()=>{removeMember(socket);for(const [id,r] of joinRequests){if(r.requesterId===socket.id){joinRequests.delete(id);const host=io.sockets.sockets.get(r.hostId);if(host)host.emit("room:request:result",{status:"expired",requestId:id,code:r.code});}}const owned=[...rooms.values()].filter(r=>r.ownerId===socket.id);for(const room of owned){rejectPendingForRoom(room.code,"expired");if(room.members.size===0)room.lastEmptyAt=Date.now();}});
 });
-
-const allowedExtensions = new Set([
-  ".png", ".jpg", ".jpeg", ".gif", ".webp",
-  ".pdf", ".txt", ".zip", ".docx", ".xlsx"
-]);
-
-const upload = multer({
-  storage,
-  limits: { fileSize: MAX_FILE_SIZE },
-  fileFilter: (_req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-
-    if (!allowedExtensions.has(ext)) {
-      return cb(new Error("This file type is not allowed."));
-    }
-
-    cb(null, true);
-  }
-});
-
-app.get("/health", (_req, res) => {
-  res.json({
-    ok: true,
-    rooms: rooms.size,
-    publicRooms: [...rooms.values()].filter(r => r.isPublic).length,
-    uptime: Math.floor(process.uptime())
-  });
-});
-
-app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, rooms: rooms.size });
-});
-
-app.post("/api/upload", (req, res) => {
-  upload.single("file")(req, res, error => {
-    if (error) {
-      return res.status(400).json({
-        error: error.code === "LIMIT_FILE_SIZE"
-          ? "File must be 8 MB or smaller."
-          : error.message
-      });
-    }
-
-    if (!req.file) {
-      return res.status(400).json({ error: "Choose a file first." });
-    }
-
-    res.json({
-      ok: true,
-      file: {
-        name: path.basename(req.file.originalname),
-        url: "/uploads/" + encodeURIComponent(req.file.filename),
-        size: req.file.size,
-        mime: req.file.mimetype
-      }
-    });
-  });
-});
-
-app.use("/uploads", express.static(uploadDir, {
-  fallthrough: false,
-  dotfiles: "deny",
-  index: false
-}));
-
-function createRoomCode() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-  for (let attempt = 0; attempt < 30; attempt++) {
-    let code = "";
-
-    for (let i = 0; i < 6; i++) {
-      code += chars[crypto.randomInt(chars.length)];
-    }
-
-    if (!rooms.has(code)) return code;
-  }
-
-  throw new Error("Could not generate a room code. Try again.");
-}
-
-function cleanName(value) {
-  if (typeof value !== "string") return "Guest";
-
-  const name = value.trim().replace(/\s+/g, " ").slice(0, 24);
-  return name || "Guest";
-}
-
-function makeSnapshot(room) {
-  return {
-    messageTtlSeconds: MESSAGE_TTL_SECONDS,
-    isPublic: room.isPublic,
-    members: [...room.members.values()].map(member => ({
-      id: member.id,
-      name: member.name,
-      color: member.color
-    })),
-    messages: room.messages
-  };
-}
-
-function publicRoomList() {
-  return [...rooms.values()]
-    .filter(room => room.isPublic)
-    .map(room => ({
-      code: room.code,
-      members: room.members.size,
-      createdAt: room.createdAt
-    }))
-    .sort((a, b) => b.members - a.members);
-}
-
-function broadcastPublicRooms() {
-  io.emit("rooms:public:update", publicRoomList());
-}
-
-function getSocketRoom(socket) {
-  if (!socket.data.roomCode) return null;
-  return rooms.get(socket.data.roomCode) || null;
-}
-
-function getMember(room, socket) {
-  return room?.members.get(socket.id) || null;
-}
-
-function broadcastMembers(code, room) {
-  io.to(code).emit(
-    "members:update",
-    [...room.members.values()].map(member => ({
-      id: member.id,
-      name: member.name,
-      color: member.color
-    }))
-  );
-}
-
-function stopTyping(socket, room, member) {
-  if (!room || !member) return;
-
-  socket.to(room.code).emit("typing:update", {
-    id: socket.id,
-    name: member.name,
-    typing: false
-  });
-}
-
-function removeMember(socket) {
-  const code = socket.data.roomCode;
-  if (!code) return;
-
-  const room = rooms.get(code);
-  socket.data.roomCode = null;
-
-  if (!room) {
-    socket.leave(code);
-    return;
-  }
-
-  const member = room.members.get(socket.id);
-
-  if (member) stopTyping(socket, room, member);
-
-  room.members.delete(socket.id);
-  socket.leave(code);
-
-  broadcastMembers(code, room);
-
-  if (room.members.size === 0) {
-    room.lastEmptyAt = Date.now();
-  }
-
-  if (room.isPublic) broadcastPublicRooms();
-}
-
-function enterRoom(socket, code, name, callback = () => {}) {
-  const room = rooms.get(code);
-
-  if (!room) {
-    return callback({
-      ok: false,
-      error: "Room not found. Check the code or create a new room."
-    });
-  }
-
-  removeMember(socket);
-
-  const member = {
-    id: socket.id,
-    name: cleanName(name),
-    color: "#" + crypto.randomBytes(3).toString("hex")
-  };
-
-  room.members.set(socket.id, member);
-  room.lastEmptyAt = null;
-  room.updatedAt = Date.now();
-
-  socket.data.roomCode = code;
-  socket.join(code);
-
-  socket.to(code).emit("system:message", {
-    text: `${member.name} joined the room.`
-  });
-
-  broadcastMembers(code, room);
-  if (room.isPublic) broadcastPublicRooms();
-
-  callback({
-    ok: true,
-    code,
-    snapshot: makeSnapshot(room)
-  });
-}
-
-function cleanExpiredMessages(room) {
-  const cutoff = Date.now() - MESSAGE_TTL_SECONDS * 1000;
-
-  room.messages = room.messages.filter(
-    message => message.createdAt > cutoff
-  );
-}
-
-
-io.on("connection", socket => {
-  // Send the current public-room list to this client.
-  socket.emit("rooms:public:update", publicRoomList());
-
-  // Client can request a fresh list at any time.
-  socket.on("rooms:public:list", (callback = () => {}) => {
-    const list = publicRoomList();
-    socket.emit("rooms:public:update", list);
-
-    if (typeof callback === "function") {
-      callback({ ok: true, rooms: list });
-    }
-  });
-
-  // Typing indicator.
-  socket.on("typing:update", (data = {}) => {
-    const room = getSocketRoom(socket);
-    const member = getMember(room, socket);
-
-    if (!room || !member) return;
-
-    socket.to(room.code).emit("typing:update", {
-      id: socket.id,
-      name: member.name,
-      typing: data.typing === true
-    });
-  });
-
-  // Create a room. Public is opt-in; rooms are private by default.
-  socket.on("room:create", (data = {}, callback = () => {}) => {
-    try {
-      const code = createRoomCode();
-
-      const room = {
-        code,
-        isPublic: data.isPublic === true,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        lastEmptyAt: null,
-        members: new Map(),
-        messages: []
-      };
-
-      rooms.set(code, room);
-
-      enterRoom(socket, code, data.name, result => {
-        if (room.isPublic) broadcastPublicRooms();
-        callback(result);
-      });
-    } catch (error) {
-      callback({
-        ok: false,
-        error: error.message || "Could not create room."
-      });
-    }
-  });
-
-  // Join by code (works for both public and private rooms).
-  socket.on("room:join", (data = {}, callback = () => {}) => {
-    const code = String(data.code || "").trim().toUpperCase();
-
-    if (!/^[A-Z0-9]{6}$/.test(code)) {
-      return callback({
-        ok: false,
-        error: "Enter a valid 6-character room code."
-      });
-    }
-
-    enterRoom(socket, code, data.name, callback);
-  });
-
-  // Send a text message.
-  socket.on("message:send", (data = {}, callback = () => {}) => {
-    const room = getSocketRoom(socket);
-    const member = getMember(room, socket);
-    const text = typeof data.text === "string"
-      ? data.text.trim()
-      : "";
-
-    if (!room || !member) {
-      return callback({ ok: false, error: "Join a room first." });
-    }
-
-    if (!text || text.length > 2000) {
-      return callback({
-        ok: false,
-        error: "Message must be 1–2000 characters."
-      });
-    }
-
-    stopTyping(socket, room, member);
-    cleanExpiredMessages(room);
-
-    const message = {
-      id: crypto.randomUUID(),
-      senderId: socket.id,
-      senderName: member.name,
-      senderColor: member.color,
-      text,
-      createdAt: Date.now(),
-      reactions: {}
-    };
-
-    room.messages.push(message);
-    room.updatedAt = Date.now();
-
-    io.to(room.code).emit("message:new", message);
-    callback({ ok: true, id: message.id });
-  });
-
-  // Share an uploaded file.
-  socket.on("file:share", (data = {}, callback = () => {}) => {
-    const room = getSocketRoom(socket);
-    const member = getMember(room, socket);
-    const file = data.file;
-
-    if (!room || !member) {
-      return callback({ ok: false, error: "Join a room first." });
-    }
-
-    if (
-      !file ||
-      typeof file.url !== "string" ||
-      !file.url.startsWith("/uploads/") ||
-      typeof file.name !== "string"
-    ) {
-      return callback({
-        ok: false,
-        error: "Invalid file information."
-      });
-    }
-
-    const message = {
-      id: crypto.randomUUID(),
-      senderId: socket.id,
-      senderName: member.name,
-      senderColor: member.color,
-      text: "",
-      file: {
-        name: path.basename(file.name).slice(0, 200),
-        url: file.url,
-        size: Number(file.size) || 0,
-        mime: String(file.mime || "application/octet-stream")
-      },
-      createdAt: Date.now(),
-      reactions: {}
-    };
-
-    room.messages.push(message);
-    room.updatedAt = Date.now();
-
-    io.to(room.code).emit("message:new", message);
-    callback({ ok: true, id: message.id });
-  });
-
-  // Toggle message reaction.
-  socket.on("reaction:toggle", (data = {}, callback = () => {}) => {
-    const room = getSocketRoom(socket);
-
-    if (!room) {
-      return callback({ ok: false, error: "Join a room first." });
-    }
-
-    const message = room.messages.find(
-      item => item.id === data.messageId
-    );
-
-    const emoji = String(data.emoji || "");
-    const allowed = [
-      "👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀"
-    ];
-
-    if (!message || !allowed.includes(emoji)) {
-      return callback({ ok: false, error: "Invalid reaction." });
-    }
-
-    if (!message.reactions[emoji]) message.reactions[emoji] = [];
-
-    const users = message.reactions[emoji];
-    const index = users.indexOf(socket.id);
-
-    if (index >= 0) users.splice(index, 1);
-    else users.push(socket.id);
-
-    if (users.length === 0) delete message.reactions[emoji];
-
-    io.to(room.code).emit("reaction:update", {
-      messageId: message.id,
-      reactions: message.reactions
-    });
-
-    callback({ ok: true });
-  });
-
-  // Clear the room's messages.
-  socket.on("room:reset", (callback = () => {}) => {
-    const room = getSocketRoom(socket);
-
-    if (!room) {
-      return callback({ ok: false, error: "Join a room first." });
-    }
-
-    room.messages = [];
-    room.updatedAt = Date.now();
-
-    io.to(room.code).emit("room:cleared");
-    callback({ ok: true });
-  });
-
-  socket.on("disconnect", () => {
-    removeMember(socket);
-  });
-});
-
-// Expire old messages and remove abandoned rooms.
-setInterval(() => {
-  const now = Date.now();
-  let publicListChanged = false;
-
-  for (const [code, room] of rooms) {
-    cleanExpiredMessages(room);
-
-    if (room.members.size === 0) {
-      if (!room.lastEmptyAt) room.lastEmptyAt = now;
-
-      if (now - room.lastEmptyAt > ROOM_TTL_MS) {
-        rooms.delete(code);
-        if (room.isPublic) publicListChanged = true;
-      }
-    }
-  }
-
-  if (publicListChanged) broadcastPublicRooms();
-}, 60 * 1000).unref();
-
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`TempChat server listening on port ${PORT}`);
-});
+setInterval(()=>{const now=Date.now();let changed=false;for(const [code,room] of rooms){cleanExpiredMessages(room);if(room.members.size===0){if(!room.lastEmptyAt)room.lastEmptyAt=now;if(now-room.lastEmptyAt>ROOM_TTL_MS){rejectPendingForRoom(code);rooms.delete(code);if(room.isPublic)changed=true;}}}for(const [id,r] of joinRequests){if(now-r.createdAt>REQUEST_TTL_MS){joinRequests.delete(id);const requester=io.sockets.sockets.get(r.requesterId);if(requester)requester.emit("room:request:result",{status:"expired",code:r.code});}}if(changed)broadcastPublicRooms();},60*1000).unref();
+server.listen(PORT,"0.0.0.0",()=>console.log(`TempChat server listening on port ${PORT}`));
