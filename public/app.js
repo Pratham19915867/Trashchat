@@ -11,7 +11,7 @@
     messageForm: $("messageForm"), messageInput: $("messageInput"), fileInput: $("fileInput"),
     attachBtn: $("attachBtn"), uploadPreview: $("uploadPreview"), chatError: $("chatError"),
     resetBtn: $("resetBtn"), mobileMembersBtn: $("mobileMembersBtn"), toast: $("toast"),
-    publicRoomsList: $("publicRoomsList"), refreshRoomsBtn: $("refreshRoomsBtn"),
+    onlineRoomsSection: $("onlineRoomsSection"), publicRoomsList: $("publicRoomsList"), refreshRoomsBtn: $("refreshRoomsBtn"),
     roomRequestsPanel: $("roomRequestsPanel"), roomRequestsList: $("roomRequestsList"), pendingRequestCount: $("pendingRequestCount")
   };
   const reactions = ["👍", "❤️", "😂", "😮", "😢", "🔥", "🎉", "👀"];
@@ -296,8 +296,14 @@
   function renderPublicRooms(rooms = []) {
     if (!ui.publicRoomsList) return;
     ui.publicRoomsList.replaceChildren();
-    if (!rooms.length) { const empty=document.createElement("div"); empty.className="rooms-empty"; empty.textContent="No online rooms yet. Create one and it will appear here."; ui.publicRoomsList.append(empty); return; }
-    rooms.forEach(room => {
+
+    // Keep the lobby clean: show this section only while at least one public
+    // room is actually online. The server broadcasts again when rooms change.
+    const onlineRooms = Array.isArray(rooms) ? rooms.filter(room => room && room.code && Number(room.members) > 0) : [];
+    ui.onlineRoomsSection?.classList.toggle("hidden", onlineRooms.length === 0);
+    if (!onlineRooms.length) return;
+
+    onlineRooms.forEach(room => {
       const button=document.createElement("button"); button.type="button"; button.className="public-room-card"; button.disabled=Boolean(currentCode)||requestingRoomCode===room.code;
       const icon=document.createElement("span"); icon.className="room-live-icon"; icon.textContent="✧";
       const info=document.createElement("span"); info.className="public-room-info";
@@ -355,10 +361,12 @@
   }
   function openThemePicker() {
     themeModal.hidden = false;
+    themeModal.classList.add("open");
     document.body.classList.add("theme-picker-open");
     closeThemes.focus();
   }
   function closeThemePicker() {
+    themeModal.classList.remove("open");
     themeModal.hidden = true;
     document.body.classList.remove("theme-picker-open");
     openThemes.focus();
@@ -369,7 +377,7 @@
   openThemes.addEventListener("click", openThemePicker);
   floatingTheme.addEventListener("click", openThemePicker);
   closeThemes.addEventListener("click", closeThemePicker);
-  themeModal.addEventListener("click", event => { if (event.target === themeModal) closeThemePicker(); });
+  themeModal.addEventListener("click", event => { if (event.target === themeModal || event.target.classList.contains("theme-backdrop")) closeThemePicker(); });
   document.addEventListener("keydown", event => { if (event.key === "Escape" && !themeModal.hidden) closeThemePicker(); });
   themeOptions.forEach(option => option.addEventListener("click", () => {
     const theme = option.dataset.themeChoice;
