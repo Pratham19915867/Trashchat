@@ -3,362 +3,123 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#071522">
+  <meta name="theme-color" content="#0b0b18">
   <meta name="description" content="Temporary real-time chat rooms. Create a room, share the code, and chat.">
   <title>TempChat 2.0 — Talk, then vanish</title>
-
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
-
   <link rel="stylesheet" href="/style.css">
 </head>
-
 <body>
-  <div class="ambient ambient-one"></div>
-  <div class="ambient ambient-two"></div>
-  <div class="ambient ambient-three"></div>
-
+  <div class="ambient ambient-one"></div><div class="ambient ambient-two"></div><div class="ambient ambient-three"></div>
   <main class="shell">
-    <!-- TOP BAR -->
     <header class="topbar">
-      <a class="brand" href="/" aria-label="TempChat home">
-        <span class="brand-mark" aria-hidden="true">t</span>
-        <span>tempchat<span class="brand-version">2.0</span></span>
-      </a>
-
-      <div class="topbar-right">
-        <button
-          id="openThemes"
-          class="theme-trigger"
-          type="button"
-          aria-haspopup="dialog"
-          aria-controls="themeModal"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 3a9 9 0 1 0 0 18h1.2a2.2 2.2 0 0 0 1.6-3.7 1.6 1.6 0 0 1 1.2-2.7H18a3 3 0 0 0 3-3c0-4.7-4-8.6-9-8.6Z"/>
-            <circle cx="7.5" cy="10" r="1"/>
-            <circle cx="10" cy="6.8" r="1"/>
-            <circle cx="15" cy="7.5" r="1"/>
-          </svg>
-          <span>Theme</span>
-        </button>
-
-        <span class="connection-status">
-          <span class="live-dot"></span>
-          <span id="connectionLabel">Connecting…</span>
-        </span>
-      </div>
+      <a class="brand" href="/" aria-label="TempChat home"><span class="brand-mark" aria-hidden="true">t</span><span>tempchat<span class="brand-version">2.0</span></span></a>
+      <div class="topbar-right"><button id="openThemes" class="theme-trigger" type="button" aria-haspopup="dialog" aria-controls="themeModal"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18h1.2a2.2 2.2 0 0 0 1.6-3.7 1.6 1.6 0 0 1 1.2-2.7H18a3 3 0 0 0 3-3c0-4.7-4-8.6-9-8.6Z"/><circle cx="7.5" cy="10" r="1"/><circle cx="10" cy="6.8" r="1"/><circle cx="15" cy="7.5" r="1"/></svg><span>Theme</span></button><span class="connection-status"><span class="live-dot"></span><span id="connectionLabel">Connecting…</span></span></div>
     </header>
 
-    <!-- LOBBY -->
     <section id="lobby" class="lobby">
       <div class="hero">
-        <div class="eyebrow">YOUR SPACE. YOUR PEOPLE.</div>
+        <div class="eyebrow"><span class="sparkle">✦</span> YOUR SPACE. YOUR PEOPLE.</div>
         <h1>Talk freely.<br><span>Leave no trace.</span></h1>
-        <p class="hero-copy">
-          A little room for your conversations. No account,
-          no history that sticks around. Just you and your people.
-        </p>
+        <p class="hero-copy">A little room for your conversations. No account, no history that sticks around. Just you and your people.</p>
       </div>
+      <section class="online-rooms glass-card" aria-labelledby="onlineRoomsTitle">
+        <div class="online-rooms-heading"><div><div class="eyebrow">LIVE RIGHT NOW</div><h2 id="onlineRoomsTitle">Online rooms</h2><p>Tap a room to ask its host to let you in.</p></div><button id="refreshRoomsBtn" class="refresh-rooms-btn" type="button">↻ Refresh</button></div>
+        <div id="publicRoomsList" class="public-rooms-list"><div class="rooms-empty">Looking for open rooms…</div></div>
+      </section>
 
       <div class="entry-grid">
-        <!-- CREATE ROOM -->
         <section class="glass-card create-card">
           <div class="card-icon">✧</div>
           <h2>Create a room</h2>
           <p>Start a fresh conversation and invite your people.</p>
-
           <label for="createName">Your display name</label>
-          <input
-            id="createName"
-            maxlength="24"
-            placeholder="e.g. Alex"
-            autocomplete="nickname"
-          >
-
-          <button id="createBtn" class="primary-btn" type="button">
-            <span>Create a room</span>
-            <span>↗</span>
-          </button>
+          <input id="createName" maxlength="24" placeholder="e.g. Alex" autocomplete="nickname">
+          <button id="createBtn" class="primary-btn"><span>Create a room</span><span>↗</span></button>
         </section>
-
-        <!-- JOIN ROOM -->
         <section class="glass-card join-card">
           <div class="card-icon join-icon">⌁</div>
           <h2>Join a room</h2>
           <p>Already have a code? You're one step away.</p>
-
           <label for="joinName">Your display name</label>
-          <input
-            id="joinName"
-            maxlength="24"
-            placeholder="e.g. Alex"
-            autocomplete="nickname"
-          >
-
+          <input id="joinName" maxlength="24" placeholder="e.g. Alex" autocomplete="nickname">
           <label for="roomCode">Room code</label>
-          <input
-            id="roomCode"
-            class="code-input"
-            maxlength="6"
-            placeholder="ABC123"
-            autocomplete="off"
-            spellcheck="false"
-          >
-
-          <button id="joinBtn" class="secondary-btn" type="button">
-            <span>Join conversation</span>
-            <span>→</span>
-          </button>
+          <input id="roomCode" class="code-input" maxlength="6" placeholder="ABC123" autocomplete="off" spellcheck="false">
+          <button id="joinBtn" class="secondary-btn"><span>Join conversation</span><span>→</span></button>
         </section>
       </div>
-
-      <div class="trust-row">
-        <span>No sign-up</span>
-        <span>Temporary rooms</span>
-        <span>Files &amp; reactions</span>
-      </div>
-
+      <div class="trust-row"><span>✦ No sign-up</span><span>⌁ Temporary rooms</span><span>◈ Files & reactions</span></div>
       <p id="lobbyError" class="error-text" role="alert"></p>
     </section>
 
-    <!-- CHAT LAYOUT -->
-    <section id="chat" class="chat-layout hidden">
-      <!-- ROOM SIDEBAR -->
-      <aside class="room-sidebar glass-panel">
-        <button id="backBtn" class="back-link" type="button">
-          ← <span>Leave room</span>
-        </button>
+    <section id="roomRequestsPanel" class="room-requests-panel glass-card hidden" aria-live="polite">
+        <div class="online-rooms-heading"><div><div class="eyebrow">HOST CONTROLS</div><h2>Join requests</h2><p>Approve only people you want in your room.</p></div><span id="pendingRequestCount" class="count-pill">0</span></div>
+        <div id="roomRequestsList" class="room-requests-list"><div class="rooms-empty">No pending requests.</div></div>
+      </section>
 
+    <section id="chat" class="chat-layout hidden">
+      <aside class="room-sidebar glass-panel">
+        <button id="backBtn" class="back-link">← <span>Leave room</span></button>
         <div class="room-details">
           <div class="room-symbol">✧</div>
           <div class="muted-label">YOU'RE IN ROOM</div>
-
-          <div class="room-code-line">
-            <strong id="activeRoomCode">------</strong>
-            <button
-              id="copyCodeBtn"
-              class="icon-btn"
-              type="button"
-              title="Copy room code"
-              aria-label="Copy room code"
-            >▢</button>
-          </div>
-
-          <button id="copyInviteBtn" class="invite-btn" type="button">
-            ↗ Copy invite link
-          </button>
+          <div class="room-code-line"><strong id="activeRoomCode">------</strong><button id="copyCodeBtn" class="icon-btn" title="Copy room code" aria-label="Copy room code">▢</button></div>
+          <button id="copyInviteBtn" class="invite-btn">↗ Copy invite link</button>
         </div>
-
         <div class="sidebar-divider"></div>
-
-        <div class="members-heading">
-          <span>IN THIS ROOM</span>
-          <span id="memberCount" class="count-pill">1</span>
-        </div>
-
+        <div class="members-heading"><span>IN THIS ROOM</span><span id="memberCount" class="count-pill">1</span></div>
         <div id="membersList" class="members-list"></div>
-
         <div class="sidebar-bottom">
-          <div class="privacy-note">
-            <span>◉</span>
-            <div>
-              <strong>Temporary by design</strong>
-              <small>
-                Messages auto-delete after
-                <span id="ttlLabel">10 min</span>.
-              </small>
-            </div>
-          </div>
-
-          <button id="resetBtn" class="reset-btn" type="button">
-            ⌫ Clear room messages
-          </button>
+          <div class="privacy-note"><span>◉</span><div><strong>Temporary by design</strong><small>Messages auto-delete after <span id="ttlLabel">10 min</span>.</small></div></div>
+          <button id="resetBtn" class="reset-btn">⌫ Clear room messages</button>
         </div>
       </aside>
 
-      <!-- CONVERSATION -->
       <section class="conversation glass-panel">
         <header class="conversation-header">
-          <div class="conversation-title">
-            <div class="mini-room-icon">✧</div>
-
-            <div>
-              <h2>Private room</h2>
-              <p>
-                <span class="live-dot"></span>
-                <span id="headerMembers">1 person here</span>
-              </p>
-            </div>
-          </div>
-
-          <div class="header-actions">
-            <span class="temporary-badge">◷ TEMPORARY</span>
-
-            <button
-              id="mobileMembersBtn"
-              class="icon-btn mobile-only"
-              type="button"
-              title="Show members"
-              aria-label="Show members"
-            >☷</button>
-          </div>
+          <div class="conversation-title"><div class="mini-room-icon">✧</div><div><h2>Private room</h2><p><span class="live-dot"></span> <span id="headerMembers">1 person here</span></p></div></div>
+          <div class="header-actions"><span class="temporary-badge">◷ TEMPORARY</span><button id="mobileMembersBtn" class="icon-btn mobile-only" title="Show members">☷</button></div>
         </header>
-
-        <!--
-          Only this messages container should scroll.
-          The page and conversation panel should stay fixed.
-        -->
-        <div
-          id="messages"
-          class="messages"
-          aria-live="polite"
-          aria-relevant="additions text"
-          tabindex="0"
-        >
-          <div class="empty-state">
-            <div class="empty-orbit"><span>✧</span></div>
-            <h3>Your conversation starts here</h3>
-            <p>Say hello. Share a thought. This space is yours.</p>
-          </div>
+        <div id="messages" class="messages" aria-live="polite">
+          <div id="emptyState" class="empty-state"><div class="empty-orbit"><span>✧</span></div><h3>Your conversation starts here</h3><p>Say hello. Share a thought. This space is yours.</p></div>
         </div>
-
-        <!-- FILE PREVIEW -->
         <div id="uploadPreview" class="upload-preview hidden"></div>
-
-        <!-- ERROR MESSAGES -->
         <div id="chatError" class="chat-error" role="alert"></div>
-
-        <!-- MESSAGE COMPOSER -->
         <form id="messageForm" class="composer">
-          <input
-            id="fileInput"
-            type="file"
-            hidden
-            accept="image/*,.pdf,.txt,.zip,.docx,.xlsx"
-          >
-
-          <button
-            type="button"
-            id="attachBtn"
-            class="composer-icon"
-            title="Attach image or file"
-            aria-label="Attach file"
-          >＋</button>
-
-          <input
-            id="messageInput"
-            maxlength="2000"
-            placeholder="Type a message…"
-            autocomplete="off"
-            aria-label="Message"
-          >
-
+          <input id="fileInput" type="file" hidden accept="image/*,.pdf,.txt,.zip,.docx,.xlsx">
+          <button type="button" id="attachBtn" class="composer-icon" title="Attach image or file" aria-label="Attach file">＋</button>
+          <input id="messageInput" maxlength="2000" placeholder="Type a message…" autocomplete="off" aria-label="Message">
           <span id="typingHint" class="composer-hint">Enter ↵</span>
-
-          <button type="submit" class="send-btn" aria-label="Send message">
-            ↑
-          </button>
+          <button type="submit" class="send-btn" aria-label="Send message">↑</button>
         </form>
-
-        <div class="composer-footer">
-          <span>Keep it kind. Keep it temporary.</span>
-          <span>Messages vanish automatically</span>
-        </div>
+        <div class="composer-footer"><span>Keep it kind. Keep it temporary.</span><span>Messages vanish automatically</span></div>
       </section>
     </section>
 
-    <!-- FOOTER -->
-    <footer class="page-footer">
-      <span>© 2026 TempChat</span>
-      <span>Made for conversations that don't need to stay.</span>
-    </footer>
+    <footer class="page-footer"><span>© 2026 TempChat</span><span>Made for conversations that don't need to stay.</span></footer>
   </main>
-
-  <!-- THEME MODAL -->
-  <div
-    id="themeModal"
-    class="theme-modal"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="themeTitle"
-    aria-hidden="true"
-  >
-    <div class="theme-backdrop" data-close-themes></div>
-
-    <section class="theme-panel">
-      <header class="theme-panel-header">
-        <div>
-          <h2 id="themeTitle">Themes</h2>
-          <p>Choose your style</p>
-        </div>
-
-        <button id="closeThemes" class="theme-close" type="button">
-          Close
-        </button>
-      </header>
-
-      <div class="theme-grid">
-        <button class="theme-option" data-theme-choice="midnight" type="button">
-          <span class="theme-preview preview-midnight"></span>
-          <strong>Midnight</strong><small>Deep neon</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="aurora" type="button">
-          <span class="theme-preview preview-aurora"></span>
-          <strong>Aurora</strong><small>Green glow</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="ocean" type="button">
-          <span class="theme-preview preview-ocean"></span>
-          <strong>Ocean</strong><small>Aqua glass</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="sakura" type="button">
-          <span class="theme-preview preview-sakura"></span>
-          <strong>Sakura</strong><small>Pink night</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="desert" type="button">
-          <span class="theme-preview preview-desert"></span>
-          <strong>Desert</strong><small>Warm dusk</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="dark" type="button">
-          <span class="theme-preview preview-dark"></span>
-          <strong>Dark</strong><small>Pure dark</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="mono" type="button">
-          <span class="theme-preview preview-mono"></span>
-          <strong>Mono</strong><small>Black &amp; White</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="graphite" type="button">
-          <span class="theme-preview preview-graphite"></span>
-          <strong>Graphite</strong><small>Dark tech</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="ice" type="button">
-          <span class="theme-preview preview-ice"></span>
-          <strong>Ice</strong><small>Cool frost</small>
-        </button>
-
-        <button class="theme-option" data-theme-choice="ember" type="button">
-          <span class="theme-preview preview-ember"></span>
-          <strong>Ember</strong><small>Hot glow</small>
-        </button>
+  <div id="themeModal" class="theme-overlay" hidden>
+    <section class="theme-dialog" role="dialog" aria-modal="true" aria-labelledby="themeTitle">
+      <div class="theme-dialog-head"><div><h2 id="themeTitle">Themes</h2><p>Choose your style</p></div><button id="closeThemes" class="theme-close" type="button">Close</button></div>
+      <div id="themeGrid" class="theme-grid">
+        <button class="theme-option" data-theme-choice="midnight" type="button"><span class="theme-swatch swatch-midnight"></span><strong>Midnight</strong><small>Deep neon</small></button>
+        <button class="theme-option" data-theme-choice="aurora" type="button"><span class="theme-swatch swatch-aurora"></span><strong>Aurora</strong><small>Green glow</small></button>
+        <button class="theme-option" data-theme-choice="ocean" type="button"><span class="theme-swatch swatch-ocean"></span><strong>Ocean</strong><small>Aqua glass</small></button>
+        <button class="theme-option" data-theme-choice="sakura" type="button"><span class="theme-swatch swatch-sakura"></span><strong>Sakura</strong><small>Pink night</small></button>
+        <button class="theme-option" data-theme-choice="desert" type="button"><span class="theme-swatch swatch-desert"></span><strong>Desert</strong><small>Warm dusk</small></button>
+        <button class="theme-option" data-theme-choice="dark" type="button"><span class="theme-swatch swatch-dark"></span><strong>Dark</strong><small>Pure dark</small></button>
+        <button class="theme-option" data-theme-choice="mono" type="button"><span class="theme-swatch swatch-mono"></span><strong>Mono</strong><small>Black &amp; White</small></button>
+        <button class="theme-option" data-theme-choice="graphite" type="button"><span class="theme-swatch swatch-graphite"></span><strong>Graphite</strong><small>Dark tech</small></button>
+        <button class="theme-option" data-theme-choice="ice" type="button"><span class="theme-swatch swatch-ice"></span><strong>Ice</strong><small>Cool frost</small></button>
+        <button class="theme-option" data-theme-choice="ember" type="button"><span class="theme-swatch swatch-ember"></span><strong>Ember</strong><small>Hot glow</small></button>
       </div>
     </section>
   </div>
-
-  <!-- TOAST NOTIFICATIONS -->
-  <div id="toast" class="toast" role="status" aria-live="polite"></div>
-
-  <!-- SCRIPTS -->
+  <button id="floatingTheme" class="floating-theme" type="button" aria-label="Open theme settings"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 0 18h1.2a2.2 2.2 0 0 0 1.6-3.7 1.6 1.6 0 0 1 1.2-2.7H18a3 3 0 0 0 3-3c0-4.7-4-8.6-9-8.6Z"/><circle cx="7.5" cy="10" r="1"/><circle cx="10" cy="6.8" r="1"/><circle cx="15" cy="7.5" r="1"/></svg><span>Theme</span></button>
+  <div id="toast" class="toast" role="status"></div>
   <script src="/socket.io/socket.io.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
-```
