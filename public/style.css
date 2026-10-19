@@ -2073,3 +2073,28 @@ body {
   #chat #tcCallBar button { flex: 1 1 calc(50% - 7px); padding: 9px 7px; font-size: 11px; }
   #chat #tcCallStatus { flex-basis: 100%; }
 }
+
+
+/* TEMPCHAT 2.0 LOBBY REDESIGN + ONLINE ROOMS */
+.online-rooms,.room-requests-panel{width:100%;box-sizing:border-box;margin:24px 0 18px;padding:clamp(18px,3vw,28px);border:1px solid var(--line);border-radius:24px;background:var(--glass);backdrop-filter:blur(22px);box-shadow:0 18px 55px #0002}
+.online-rooms-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}
+.online-rooms-heading h2{font-family:'Space Grotesk',sans-serif;font-size:clamp(20px,3vw,26px);margin:5px 0}
+.online-rooms-heading p{margin:0;color:var(--muted);font-size:13px}
+.refresh-rooms-btn,.room-request-btn{border:1px solid var(--line);background:color-mix(in srgb,var(--accent) 12%,var(--glass));color:var(--text);border-radius:12px;padding:10px 14px;font:inherit;cursor:pointer;transition:transform .18s,border-color .18s}
+.refresh-rooms-btn:hover,.room-request-btn:hover{transform:translateY(-1px);border-color:var(--accent)}
+.public-rooms-list,.room-requests-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,235px),1fr));gap:12px}
+.public-room-card{display:flex;align-items:center;gap:12px;text-align:left;width:100%;min-width:0;padding:15px;border:1px solid var(--line);border-radius:17px;background:color-mix(in srgb,var(--bg) 68%,transparent);color:var(--text);cursor:pointer;transition:transform .18s,border-color .18s,background .18s}
+.public-room-card:hover:not(:disabled){transform:translateY(-2px);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 9%,var(--glass))}
+.public-room-card:disabled{opacity:.65;cursor:wait}
+.room-live-icon{display:grid;place-items:center;flex:0 0 42px;width:42px;height:42px;border-radius:14px;background:color-mix(in srgb,var(--accent) 17%,transparent);color:var(--accent);font-size:20px}
+.public-room-info{min-width:0;flex:1}.public-room-info strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}.public-room-info small{display:block;color:var(--muted);font-size:11px;margin-top:5px}.room-join-arrow{color:var(--accent);font-size:20px}
+.rooms-empty{grid-column:1/-1;border:1px dashed var(--line);border-radius:15px;padding:22px;text-align:center;color:var(--muted);font-size:13px}
+.room-request-item{display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:14px;border:1px solid var(--line);border-radius:15px;background:color-mix(in srgb,var(--bg) 68%,transparent)}
+.room-request-name{flex:1 1 100%;font-weight:700}.room-request-actions{display:flex;gap:8px;width:100%}.room-request-actions button{flex:1}.room-request-btn.allow{border-color:#34d39966;background:#10b98118}.room-request-btn.reject{border-color:#fb718566;background:#ef444418}
+#roomRequestsPanel.hidden{display:none!important}
+@media(max-width:620px){.online-rooms,.room-requests-panel{margin:16px 0;padding:17px;border-radius:19px}.online-rooms-heading{align-items:flex-start}.online-rooms-heading p{max-width:250px}.refresh-rooms-btn{padding:9px 10px;font-size:12px}.public-rooms-list,.room-requests-list{grid-template-columns:1fr}.hero h1{font-size:clamp(40px,12vw,60px)}}
+
+/* Approval panel stays available while the host is inside the chat. */
+#roomRequestsPanel{position:fixed;right:20px;bottom:20px;z-index:9000;width:min(470px,calc(100vw - 32px));max-height:min(65vh,520px);overflow:auto;margin:0;box-shadow:0 24px 80px #0008}
+#roomRequestsPanel.hidden{display:none!important}
+@media(max-width:620px){#roomRequestsPanel{right:10px;bottom:10px;width:calc(100vw - 20px);max-height:55vh}}
