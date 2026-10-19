@@ -20,6 +20,36 @@
   let selectedFile = null;
   let toastTimer = null;
 
+  // Small UI sounds made with Web Audio (no external audio files needed).
+  let uiAudioContext = null;
+  function playUiSound(kind) {
+    try {
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      uiAudioContext ||= new AudioContextClass();
+      if (uiAudioContext.state === "suspended") uiAudioContext.resume().catch(() => {});
+      const patterns = {
+        roomCreate: [{ f: 620, t: 0 }, { f: 830, t: 0.09 }, { f: 1040, t: 0.18 }],
+        roomJoin: [{ f: 660, t: 0 }, { f: 880, t: 0.10 }],
+        message: [{ f: 740, t: 0 }]
+      };
+      (patterns[kind] || patterns.message).forEach(({ f, t }) => {
+        const osc = uiAudioContext.createOscillator();
+        const gain = uiAudioContext.createGain();
+        const start = uiAudioContext.currentTime + t;
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(f, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.055, start + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.13);
+        osc.connect(gain);
+        gain.connect(uiAudioContext.destination);
+        osc.start(start);
+        osc.stop(start + 0.14);
+      });
+    } catch (_) { /* Sound is optional; never interrupt chat if unavailable. */ }
+  }
+
   socket.on("connect", () => { ui.connectionLabel.textContent = "Connected"; });
   socket.on("disconnect", () => { ui.connectionLabel.textContent = "Reconnecting…"; });
   socket.on("connect_error", () => { ui.connectionLabel.textContent = "Connection issue"; });
@@ -62,6 +92,8 @@
     showError("", errorTarget);
     socket.emit(eventName, data, result => {
       if (!result?.ok) return showError(result?.error || "Something went wrong.", errorTarget);
+      if (eventName === "room:create") playUiSound("roomCreate");
+      else if (eventName === "room:join") playUiSound("roomJoin");
       setRoom(result.code, result.snapshot);
     });
   }
@@ -130,6 +162,7 @@
     socket.emit("message:send", { text }, result => {
       if (!result?.ok) return showError(result?.error || "Message could not be sent.", "chatError");
       ui.messageInput.value = "";
+      playUiSound("message");
       showError("", "chatError");
     });
   });
