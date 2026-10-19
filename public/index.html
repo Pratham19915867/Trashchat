@@ -25,7 +25,7 @@
         <h1>Talk freely.<br><span>Leave no trace.</span></h1>
         <p class="hero-copy">A little room for your conversations. No account, no history that sticks around. Just you and your people.</p>
       </div>
-      <section class="online-rooms glass-card" aria-labelledby="onlineRoomsTitle">
+      <section id="onlineRoomsSection" class="online-rooms glass-card hidden" aria-labelledby="onlineRoomsTitle">
         <div class="online-rooms-heading"><div><div class="eyebrow">LIVE RIGHT NOW</div><h2 id="onlineRoomsTitle">Online rooms</h2><p>Tap a room to ask its host to let you in.</p></div><button id="refreshRoomsBtn" class="refresh-rooms-btn" type="button">↻ Refresh</button></div>
         <div id="publicRoomsList" class="public-rooms-list"><div class="rooms-empty">Looking for open rooms…</div></div>
       </section>
@@ -100,7 +100,7 @@
 
     <footer class="page-footer"><span>© 2026 TempChat</span><span>Made for conversations that don't need to stay.</span></footer>
   </main>
-  <div id="themeModal" class="theme-overlay" hidden>
+  <div id="themeModal" class="theme-modal" hidden>
     <section class="theme-dialog" role="dialog" aria-modal="true" aria-labelledby="themeTitle">
       <div class="theme-dialog-head"><div><h2 id="themeTitle">Themes</h2><p>Choose your style</p></div><button id="closeThemes" class="theme-close" type="button">Close</button></div>
       <div id="themeGrid" class="theme-grid">
